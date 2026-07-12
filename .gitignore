@@ -1,5 +1,11 @@
 node_modules/
+out/
 dist/
 dist-electron/
 release/
 *.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.tsbuildinfo

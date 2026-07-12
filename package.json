@@ -2,15 +2,20 @@
   "name": "retro-archive-explorer",
   "version": "1.0.0",
   "description": "Electron application for extracting and inspecting legacy retro engine formats",
-  "main": "./dist-electron/main.js",
+  "main": "./out/main/main.js",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build && electron-builder",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --ext ts,tsx"
+    "lint": "eslint . --ext ts,tsx",
+    "icons": "node scripts/gen-icons.mjs",
+    "dist": "electron-vite build && electron-builder",
+    "release": "electron-vite build && electron-builder --publish always"
   },
   "dependencies": {
+    "electron-updater": "^6.1.8",
     "three": "^0.164.0"
   },
   "devDependencies": {
@@ -23,14 +28,15 @@
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^30.0.6",
     "electron-builder": "^24.13.3",
+    "electron-vite": "^5.0.0",
     "eslint": "^8.57.0",
     "lucide-react": "^0.378.0",
+    "png-to-ico": "^2.1.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "sharp": "^0.35.3",
     "typescript": "^5.4.5",
-    "vite": "^5.2.11",
-    "vite-plugin-electron": "^0.28.7",
-    "vite-plugin-electron-renderer": "^0.14.5"
+    "vite": "^5.2.11"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -42,11 +48,40 @@
     "appId": "com.retroviewer.app",
     "productName": "Retro Archive Explorer",
     "files": [
-      "dist/**/*",
-      "dist-electron/**/*"
+      "out/**/*"
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "joe-lloyd",
+        "repo": "retro-archive-explorer"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Utility"
     }
   }
 }

@@ -114,6 +114,16 @@ export type ParsedAsset =
   | AudioAsset
   | StructuredAsset;
 
+/** A previously opened disc image, shown on the home screen. */
+export interface RecentFile {
+  /** Absolute path to the image on disk. */
+  path: string;
+  /** Base file name for display. */
+  name: string;
+  /** Epoch milliseconds when the file was last opened. */
+  lastOpened: number;
+}
+
 /** Discriminated result wrapper so parse errors travel as data, never thrown across IPC. */
 export type Result<T> =
   | { ok: true; value: T }

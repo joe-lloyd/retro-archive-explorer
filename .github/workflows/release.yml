@@ -1,0 +1,41 @@
+name: Release
+
+# Publish cross-platform builds when a version tag is pushed (e.g. v1.2.0).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # needed to create/update the GitHub Release
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and publish
+        env:
+          # electron-builder publishes to GitHub Releases using this token.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm release

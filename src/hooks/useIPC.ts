@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ParsedAsset, Result, VirtualNode } from '../../shared/types';
+import type { ParsedAsset, RecentFile, Result, VirtualNode } from '../../shared/types';
 
 /** Unwrap a Result, throwing the error string so callers can catch uniformly. */
 function unwrap<T>(res: Result<T>): T {
@@ -21,17 +21,53 @@ export function useArchive() {
     error: null,
   });
 
-  const open = useCallback(async () => {
+  const run = useCallback(async (fn: () => Promise<Result<VirtualNode>>) => {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
-      const root = unwrap(await window.retro.openArchive());
+      const root = unwrap(await fn());
       setState({ data: root, loading: false, error: null });
     } catch (err) {
       setState({ data: null, loading: false, error: (err as Error).message });
     }
   }, []);
 
-  return { root: state.data, opening: state.loading, error: state.error, open };
+  const open = useCallback(() => run(() => window.retro.openArchive()), [run]);
+  const openPath = useCallback(
+    (filePath: string) => run(() => window.retro.openRecent({ filePath })),
+    [run],
+  );
+  const close = useCallback(async () => {
+    await window.retro.closeArchive();
+    setState({ data: null, loading: false, error: null });
+  }, []);
+
+  return { root: state.data, opening: state.loading, error: state.error, open, openPath, close };
+}
+
+/** Load and manage the persisted recent-files list. */
+export function useRecents() {
+  const [recents, setRecents] = useState<RecentFile[]>([]);
+
+  const refresh = useCallback(async () => {
+    const res = await window.retro.recentList();
+    if (res.ok) setRecents(res.value);
+  }, []);
+
+  const remove = useCallback(async (filePath: string) => {
+    const res = await window.retro.recentRemove({ filePath });
+    if (res.ok) setRecents(res.value);
+  }, []);
+
+  const clear = useCallback(async () => {
+    const res = await window.retro.recentClear();
+    if (res.ok) setRecents(res.value);
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { recents, refresh, remove, clear };
 }
 
 /** Parse the selected node into a viewer-ready asset, tracking loading/error. */
