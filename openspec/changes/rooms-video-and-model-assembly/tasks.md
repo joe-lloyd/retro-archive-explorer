@@ -7,9 +7,9 @@
 
 ## 2. DOR door parser
 
-- [ ] 2.1 Analyze `.DOR` (DOOR00) to confirm the start-of-file offset table and the door-model + texture slots
-- [ ] 2.2 Implement `re1/dor.ts`: parse the table, decode the door TMD, resolve the TIM texture
-- [ ] 2.3 Route `.DOR` to the model/door viewer; textured, with descriptive error on layout mismatch
+- [x] 2.1 Confirmed DOR layout: offset table where slot 1 → door model TMD (0x140c), slot 2 → texture TIM (0xafd4)
+- [x] 2.2 Implemented `parseDoor`: parse the table, decode the door TMD, resolve the TIM texture (DOOR00 → 12 objs, 697 tris, 128x256 texture)
+- [x] 2.3 Routed `.DOR` to `parseModel`→`parseDoor`; textured, descriptive error on layout mismatch
 
 ## 3. STR video decode
 

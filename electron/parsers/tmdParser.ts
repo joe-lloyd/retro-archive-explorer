@@ -408,6 +408,33 @@ export function parseEmd(buffer: Buffer): MeshObject[] {
   return meshes;
 }
 
+/**
+ * Parse a Resident Evil 1 `.DOR` door file. It has a start-of-file offset table
+ * where slot 1 points to the door model (a standard TMD) and slot 2 points to
+ * its texture (a TIM); other slots hold animation data.
+ */
+export function parseDoor(buffer: Buffer): ModelAsset {
+  if (buffer.length < 16) throw new Error('DOR too small');
+  const modelOff = buffer.readUInt32LE(4);
+  const texOff = buffer.readUInt32LE(8);
+  if (!(modelOff > 0 && modelOff < texOff && texOff < buffer.length)) {
+    throw new Error('unexpected DOR offset table');
+  }
+  if (buffer.readUInt32LE(modelOff) !== TMD_ID) {
+    throw new Error('DOR model slot is not a TMD');
+  }
+  const objects = parseTmd(buffer.subarray(modelOff, texOff), 'door');
+
+  let texture: ModelTexture | undefined;
+  try {
+    const t = parseTim(buffer.subarray(texOff));
+    texture = { width: t.width, height: t.height, pixels: t.pixels };
+  } catch {
+    texture = undefined;
+  }
+  return { kind: 'model', objects, texture, sourceExt: 'dor' };
+}
+
 /** Best-effort: find an embedded TIM and decode it as a model texture. */
 export function findEmbeddedTexture(buffer: Buffer): ModelTexture | undefined {
   for (let off = 0; off + 8 <= buffer.length; off += 4) {
@@ -430,8 +457,12 @@ export function parseModel(buffer: Buffer, extension: string | undefined): Model
   if (extension === 'emd') {
     return parseEmdContainer(buffer);
   }
-  // IVM/DOR embed TMD blocks at non-zero offsets (plus a TIM); scan for them.
-  if (extension === 'ivm' || extension === 'dor') {
+  // DOR uses its own start-of-file offset table (model TMD + texture TIM).
+  if (extension === 'dor') {
+    return parseDoor(buffer);
+  }
+  // IVM embeds a TMD block at a non-zero offset (plus a TIM); scan for it.
+  if (extension === 'ivm') {
     const objects = parseEmd(buffer);
     const texture = findEmbeddedTexture(buffer);
     return { kind: 'model', objects, texture, sourceExt: extension };
