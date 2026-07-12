@@ -100,8 +100,14 @@ export function interpretRdt(bytes: Uint8Array, node: VirtualNode): ArchiveAsset
 
   const entries: VirtualNode[] = ptrs
     .map(({ slot: s, offset }) => {
-      const size = sizeOf.get(offset) ?? 0;
       const { label, ext } = classifyRdtSection(buf, offset);
+      let size = sizeOf.get(offset) ?? 0;
+      // A VAB header's body follows it contiguously; span the whole bank (fsize)
+      // so it can be split into samples and played.
+      if (ext === 'vab' && offset + 0x10 <= buf.length) {
+        const fsize = buf.readUInt32LE(offset + 0x0c);
+        if (fsize > size && offset + fsize <= buf.length) size = fsize;
+      }
       const name = `${String(s).padStart(2, '0')}_${label}.${ext}`;
       return {
         id: `${node.id}:s${s}`,

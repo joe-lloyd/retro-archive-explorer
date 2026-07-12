@@ -76,6 +76,48 @@ function magic(buffer: Buffer, n = 4): string {
 }
 
 /**
+ * Decode a PSX VAB sound bank (header `VABp` + body of SPU-ADPCM samples) into a
+ * single playable WAV that concatenates every sample with a short gap between
+ * them. The header lists each sample's size; the body follows the fixed-size
+ * header region (32B VabHdr + 2048B programs + programs*16*32B tones + 512B
+ * VAG size table).
+ */
+export function decodeVab(buffer: Buffer): { wav: Uint8Array; count: number } {
+  const ps = buffer.readUInt16LE(0x12); // number of programs
+  const vs = buffer.readUInt16LE(0x16); // number of VAG samples
+  const vagTableOff = 32 + 2048 + ps * 16 * 32;
+  const headerSize = vagTableOff + 512;
+  if (vs === 0 || vs > 254 || headerSize >= buffer.length) {
+    throw new Error('VAB has no body to decode (header only)');
+  }
+
+  // sizes[0] is a dummy; sizes[1..vs] are byte lengths (stored in 8-byte units).
+  const sizes: number[] = [];
+  for (let i = 0; i <= vs; i++) sizes.push(buffer.readUInt16LE(vagTableOff + i * 2) * 8);
+
+  const rate = 22050;
+  const gap = Math.floor(rate * 0.12); // ~120ms silence between samples
+  const parts: Int16Array[] = [];
+  let pos = headerSize;
+  for (let i = 1; i <= vs; i++) {
+    const sz = sizes[i];
+    if (sz <= 0 || pos + sz > buffer.length) break;
+    parts.push(decodeAdpcm(buffer.subarray(pos, pos + sz)));
+    pos += sz;
+  }
+  if (parts.length === 0) throw new Error('VAB body produced no samples');
+
+  const total = parts.reduce((n, p) => n + p.length + gap, 0);
+  const all = new Int16Array(total);
+  let o = 0;
+  for (const p of parts) {
+    all.set(p, o);
+    o += p.length + gap;
+  }
+  return { wav: pcmToWav(all, rate), count: parts.length };
+}
+
+/**
  * Turn an audio file into something the renderer can play. VAG/SPU-ADPCM is
  * decoded to WAV; already-playable containers pass through; undecodable codecs
  * (XA streaming, VAB banks) are identified and reported.
@@ -99,12 +141,22 @@ export function parseAudio(buffer: Buffer, extension: string | undefined): Audio
     };
   }
   if (sig === 'pBAV' || sig === 'VABp') {
-    return {
-      kind: 'audio',
-      bytes: new Uint8Array(0),
-      mime: 'application/octet-stream',
-      note: 'VAB sample bank — contains multiple samples; per-sample decoding not yet supported.',
-    };
+    try {
+      const { wav, count } = decodeVab(buffer);
+      return {
+        kind: 'audio',
+        bytes: wav,
+        mime: 'audio/wav',
+        note: `VAB sound bank: ${count} samples decoded @22050 Hz (approx), played back to back.`,
+      };
+    } catch (err) {
+      return {
+        kind: 'audio',
+        bytes: new Uint8Array(0),
+        mime: 'application/octet-stream',
+        note: `VAB header (no body in this file): ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
   if (extension === 'xa') {
     return {
