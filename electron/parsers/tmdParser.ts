@@ -292,6 +292,55 @@ export function parseRe1EnemyMesh(buffer: Buffer, namePrefix = 'part'): MeshObje
 }
 
 /**
+ * Compute each bone's world position from the EMD skeleton section by
+ * accumulating per-bone relative positions down the armature hierarchy.
+ * Layout (reevengi emd_common.h / emd2xml.c): header
+ * `{u16 relpos_len, move_offset, count, move_size}`; relative positions
+ * `int16 x,y,z` per bone at `skel+8`; armature `{u16 num_mesh, offset}` per bone
+ * at `skel+relpos_len`, with child bone indices as bytes at `armature+offset`.
+ */
+function parseEmdSkeleton(buffer: Buffer, skelOff: number): number[][] {
+  const relposLen = buffer.readUInt16LE(skelOff);
+  const count = buffer.readUInt16LE(skelOff + 4);
+  if (count === 0 || count > 512) throw new Error('implausible bone count');
+  const relposBase = skelOff + 8;
+  const armBase = skelOff + relposLen;
+  const world: number[][] = Array.from({ length: count }, () => [0, 0, 0]);
+  const seen = new Set<number>();
+
+  const dfs = (bone: number, px: number, py: number, pz: number): void => {
+    if (bone >= count || seen.has(bone)) return;
+    seen.add(bone);
+    const rx = buffer.readInt16LE(relposBase + bone * 6);
+    const ry = buffer.readInt16LE(relposBase + bone * 6 + 2);
+    const rz = buffer.readInt16LE(relposBase + bone * 6 + 4);
+    const wx = px + rx, wy = py + ry, wz = pz + rz;
+    world[bone] = [wx, wy, wz];
+    const numMesh = buffer.readUInt16LE(armBase + bone * 4);
+    const off = buffer.readUInt16LE(armBase + bone * 4 + 2);
+    for (let i = 0; i < numMesh; i++) {
+      const at = armBase + off + i;
+      if (at < buffer.length) dfs(buffer[at], wx, wy, wz);
+    }
+  };
+  dfs(0, 0, 0, 0);
+  return world;
+}
+
+/** Translate each mesh part's vertices by its bone's accumulated world position. */
+function assembleBySkeleton(objects: MeshObject[], world: number[][]): void {
+  objects.forEach((o, i) => {
+    const w = world[i];
+    if (!w) return; // extra objects with no bone stay where they are
+    for (let j = 0; j < o.positions.length; j += 3) {
+      o.positions[j] += w[0];
+      o.positions[j + 1] += w[1];
+      o.positions[j + 2] += w[2];
+    }
+  });
+}
+
+/**
  * Parse a Resident Evil 1 `.EMD` via its real container layout: a directory of
  * four little-endian offsets at `filesize - 16` pointing to
  * `[skeleton, animation, mesh, texture]`. The mesh section is a TMD-style object
@@ -318,6 +367,14 @@ export function parseEmdContainer(buffer: Buffer): ModelAsset {
       ? parseTmd(meshBuf, 'part')
       : parseRe1EnemyMesh(meshBuf, 'part');
   if (objects.length === 0) throw new Error('EMD mesh section produced no geometry');
+
+  // Mesh parts are stored in bone-local space; place each by its skeleton bone's
+  // accumulated world position so the model assembles instead of stacking.
+  try {
+    assembleBySkeleton(objects, parseEmdSkeleton(buffer, skel));
+  } catch {
+    // If the skeleton can't be read, render parts unassembled rather than fail.
+  }
 
   let texture: ModelTexture | undefined;
   try {

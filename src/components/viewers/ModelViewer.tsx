@@ -74,10 +74,12 @@ export function ModelViewer({ asset }: { asset: ModelAsset }) {
       disposables.push(material);
       group.add(new THREE.Mesh(geometry, material));
     }
-    // Orientation fix: IVM item models come in upside-down and rotated 90°.
-    // (Targeted to IVM so TMD/EMD, which look correct, aren't regressed.)
-    if (asset.sourceExt === 'ivm') {
+    // Orientation fix: PSX uses Y-down, so flip EMD/IVM models upright.
+    // IVM items additionally come in rotated 90°.
+    if (asset.sourceExt === 'ivm' || asset.sourceExt === 'emd') {
       group.rotation.x = Math.PI;
+    }
+    if (asset.sourceExt === 'ivm') {
       group.rotation.z = Math.PI / 2;
     }
     scene.add(group);
