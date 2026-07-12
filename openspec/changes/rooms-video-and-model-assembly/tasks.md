@@ -3,7 +3,9 @@
 - [x] 1.1 Located rest positions: `int16 x,y,z` per bone at `skel+8`; armature at `skel+relpos_len` (reevengi emd_common.h/emd2xml.c)
 - [x] 1.2 Accumulate parent→child bone translations via DFS over the armature hierarchy (`parseEmdSkeleton`)
 - [x] 1.3 Offset each mesh part by its bone's world position (`assembleBySkeleton`); both char + enemy parts are bone-local. Added EMD Y-up flip
-- [ ] 1.4 Verify visually with the user that characters assemble correctly
+- [x] 1.4 Verified with user: models assemble correctly. Follow-ups found:
+- [ ] 1.5 Fix EMD texturing: apply per-face `clutid`/`page` (VRAM tpage/CLUT) to UVs — currently discarded, so wrong texture region maps to each face (e.g. face texture on chest)
+- [ ] 1.6 Fix DOR handle placement: door sub-objects (handles) default to (0,0,0); locate + apply their positions
 
 ## 2. DOR door parser
 
@@ -26,7 +28,7 @@
 
 ## 5. Room (RDT) viewer
 
-- [ ] 5.1 Analyze RDT to locate camera background image data and the RID camera table
+- [x] 5.1 Located: RDT offset table is at 0x40 (64-byte header, reevengi); ROOM1000 section 20 (197 KB) is the raw background, section 22 a TIM, section 19 the VAB. Fixed `interpretRdt` to read 0x40 + type-detect sections (TMD/TIM/VAB) — replaces the byte-8 mislabeling (no more bogus "messages" slot)
 - [ ] 5.2 Decode per-camera background image(s) in `re1/rdtRoom.ts`
 - [ ] 5.3 Add a `room` asset kind and `RoomViewer`: show current camera background, cycle cameras, list sections
 - [ ] 5.4 Section inspector: expose RID/RVD/SCA/SCD/VH/VB/TIM/items with offsets/sizes (reuse structured/archive views)

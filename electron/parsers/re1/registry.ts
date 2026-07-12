@@ -56,39 +56,38 @@ function overviewSection(bytes: Uint8Array): StructuredSection {
   };
 }
 
-// Best-effort labels + probable content type for RE1 RDT offset-table slots.
-const RDT_SLOTS: { label: string; ext: string }[] = [
-  { label: 'camera-switches', ext: 'rvd' },
-  { label: 'camera-positions', ext: 'rid' },
-  { label: 'lighting', ext: 'bin' },
-  { label: 'collision', ext: 'sca' },
-  { label: 'floor', ext: 'bin' },
-  { label: 'block', ext: 'bin' },
-  { label: 'messages', ext: 'stf' },
-  { label: 'scroll', ext: 'bin' },
-  { label: 'init-script', ext: 'scd' },
-  { label: 'main-script', ext: 'scd' },
-  { label: 'sound-edt', ext: 'bin' },
-  { label: 'sound-header', ext: 'vh' },
-  { label: 'sound-body', ext: 'vb' },
-  { label: 'room-texture', ext: 'tim' },
-];
+const RDT_HEADER_SIZE = 0x40; // reevengi: 16-byte header + 3×16-byte parts
+const RDT_MAX_SLOTS = 24;
+
+/** Identify a section by its content magic so it can be previewed correctly. */
+function classifyRdtSection(buf: Buffer, offset: number): { label: string; ext: string } {
+  if (offset + 4 > buf.length) return { label: 'data', ext: 'bin' };
+  const u = buf.readUInt32LE(offset);
+  if (u === 0x41) return { label: 'model', ext: 'tmd' };
+  if (u === 0x10) return { label: 'texture', ext: 'tim' };
+  if (u === 0x56414270) return { label: 'sound', ext: 'vab' }; // 'pBAV'
+  return { label: 'data', ext: 'bin' };
+}
 
 /**
- * Interpret an RDT room file as an expandable archive of its named sections,
- * derived from the header offset table. Each section becomes a sub-file that can
- * itself be previewed (e.g. the room texture renders, the sound body plays).
+ * Interpret an RDT room file as an expandable archive of its sections, from the
+ * header offset table at 0x40 (reevengi: RE1 RDT has a 64-byte header). Each
+ * in-file pointer becomes a sub-file, typed by its content magic so embedded
+ * models (TMD) and textures (TIM) render and the sound bank (VAB) is identified.
  */
 export function interpretRdt(bytes: Uint8Array, node: VirtualNode): ArchiveAsset {
   const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
-  // Collect plausible in-file pointers from the table after the 8-byte header.
+  // Collect distinct, in-file pointers from the offset table.
+  const seen = new Set<number>();
   const ptrs: { slot: number; offset: number }[] = [];
-  let slot = 0;
-  for (let off = 8; off + 4 <= Math.min(buf.length, 8 + 24 * 4); off += 4) {
-    const ptr = buf.readUInt32LE(off);
-    if (ptr < 8 || ptr >= buf.length) continue;
-    ptrs.push({ slot: slot++, offset: ptr });
+  for (let i = 0; i < RDT_MAX_SLOTS; i++) {
+    const at = RDT_HEADER_SIZE + i * 4;
+    if (at + 4 > buf.length) break;
+    const ptr = buf.readUInt32LE(at);
+    if (ptr <= RDT_HEADER_SIZE || ptr >= buf.length || seen.has(ptr)) continue;
+    seen.add(ptr);
+    ptrs.push({ slot: i, offset: ptr });
   }
 
   // Section size = gap to the next pointer (by file order).
@@ -101,15 +100,15 @@ export function interpretRdt(bytes: Uint8Array, node: VirtualNode): ArchiveAsset
 
   const entries: VirtualNode[] = ptrs
     .map(({ slot: s, offset }) => {
-      const meta = RDT_SLOTS[s] ?? { label: `block-${s}`, ext: 'bin' };
       const size = sizeOf.get(offset) ?? 0;
-      const name = `${String(s).padStart(2, '0')}_${meta.label}.${meta.ext}`;
+      const { label, ext } = classifyRdtSection(buf, offset);
+      const name = `${String(s).padStart(2, '0')}_${label}.${ext}`;
       return {
         id: `${node.id}:s${s}`,
         name,
         path: `${node.path}/${name}`,
         type: 'file' as const,
-        extension: meta.ext,
+        extension: ext,
         size,
         offset,
       };
