@@ -214,6 +214,84 @@ export function parseTmd(buffer: Buffer, namePrefix = 'object'): MeshObject[] {
 }
 
 /**
+ * Parse a Resident Evil 1 enemy mesh section (id-less `[length, unknown, count]`
+ * header). Unlike a standard TMD, its primitives are FIXED 28-byte triangles:
+ *   u32 unknown; u8 tu0,tv0; u16 clut; u8 tu1,tv1; u16 page; u8 tu2,tv2; u16 pad;
+ *   u16 n0,v0; u16 n1,v1; u16 n2,v2;
+ * (structs from pmandin/reevengi-tools src/emd1.h). Vertices are emd_vertex4_t
+ * (x,y,z,pad int16). Object offsets are relative to the 12-byte header.
+ */
+export function parseRe1EnemyMesh(buffer: Buffer, namePrefix = 'part'): MeshObject[] {
+  const r = new BinaryReader(buffer);
+  r.u32(); // length
+  r.u32(); // unknown
+  const count = r.u32();
+  if (count === 0 || count > MAX_OBJECTS) throw new Error(`implausible RE1 mesh count ${count}`);
+
+  interface Obj { vtxOff: number; vtxCount: number; triOff: number; triCount: number }
+  const objs: Obj[] = [];
+  r.seek(HEADER_SIZE);
+  for (let i = 0; i < count; i++) {
+    const vtxOff = r.u32() + HEADER_SIZE;
+    const vtxCount = r.u32();
+    r.u32(); // nor_offset
+    r.u32(); // nor_count
+    const triOff = r.u32() + HEADER_SIZE;
+    const triCount = r.u32();
+    r.u32(); // dummy
+    objs.push({ vtxOff, vtxCount, triOff, triCount });
+  }
+
+  const meshes: MeshObject[] = [];
+  objs.forEach((o, i) => {
+    if (o.vtxCount > MAX_VERTS || o.triCount > MAX_PRIMS) throw new Error('RE1 mesh part too large');
+    const pos = new Float32Array(o.vtxCount * 3);
+    r.seek(o.vtxOff);
+    for (let v = 0; v < o.vtxCount; v++) {
+      pos[v * 3] = r.i16();
+      pos[v * 3 + 1] = r.i16();
+      pos[v * 3 + 2] = r.i16();
+      r.u16(); // pad
+    }
+
+    const out = new MeshBuilder();
+    out.hasTexture = true;
+    r.seek(o.triOff);
+    for (let t = 0; t < o.triCount; t++) {
+      r.u32(); // unknown
+      const tu0 = r.u8(); const tv0 = r.u8(); r.u16(); // clut
+      const tu1 = r.u8(); const tv1 = r.u8(); r.u16(); // page
+      const tu2 = r.u8(); const tv2 = r.u8(); r.u16(); // pad
+      r.u16(); const v0 = r.u16();
+      r.u16(); const v1 = r.u16();
+      r.u16(); const v2 = r.u16();
+      if (v0 >= o.vtxCount || v1 >= o.vtxCount || v2 >= o.vtxCount) continue;
+      const verts: [number, number, number][] = [
+        [v0, tu0, tv0],
+        [v1, tu1, tv1],
+        [v2, tu2, tv2],
+      ];
+      for (const [vi, tu, tv] of verts) {
+        out.positions.push(pos[vi * 3], pos[vi * 3 + 1], pos[vi * 3 + 2]);
+        out.colors.push(TEX_GRAY[0], TEX_GRAY[1], TEX_GRAY[2]);
+        out.uvs.push(tu, tv);
+      }
+      out.triangleCount++;
+    }
+    if (out.triangleCount > 0) {
+      meshes.push({
+        name: `${namePrefix}_${i}`,
+        positions: Float32Array.from(out.positions),
+        colors: Float32Array.from(out.colors),
+        uvs: Float32Array.from(out.uvs),
+        triangleCount: out.triangleCount,
+      });
+    }
+  });
+  return meshes;
+}
+
+/**
  * Parse a Resident Evil 1 `.EMD` via its real container layout: a directory of
  * four little-endian offsets at `filesize - 16` pointing to
  * `[skeleton, animation, mesh, texture]`. The mesh section is a TMD-style object
@@ -232,7 +310,13 @@ export function parseEmdContainer(buffer: Buffer): ModelAsset {
   void skel;
   void anim;
 
-  const objects = parseTmd(buffer.subarray(mesh, tim), 'part');
+  // Characters store a standard TMD (id 0x41); enemies use the id-less mesh with
+  // fixed 28-byte triangles — decode each with the matching parser.
+  const meshBuf = buffer.subarray(mesh, tim);
+  const objects =
+    meshBuf.length >= 4 && meshBuf.readUInt32LE(0) === TMD_ID
+      ? parseTmd(meshBuf, 'part')
+      : parseRe1EnemyMesh(meshBuf, 'part');
   if (objects.length === 0) throw new Error('EMD mesh section produced no geometry');
 
   let texture: ModelTexture | undefined;
