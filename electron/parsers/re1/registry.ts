@@ -2,6 +2,7 @@ import type {
   ArchiveAsset,
   ParsedAsset,
   StructuredAsset,
+  StructuredField,
   StructuredSection,
   VirtualNode,
 } from '../../../shared/types';
@@ -27,6 +28,10 @@ export const RE1_FORMATS: Record<string, { name: string; description: string }> 
   stf: { name: 'Text Data (STF)', description: 'Text data, typically the staff roll and credits.' },
   tim: { name: 'PSX Texture (TIM)', description: 'PlayStation texture image with CLUT palette.' },
   tmd: { name: 'PSX Model (TMD)', description: 'PlayStation 3D model (vertices, normals, primitives).' },
+  hed: { name: 'Sound Header (HED)', description: 'Sound-bank header describing samples packed in the paired .VB body.' },
+  vb: { name: 'Sound Body (VB)', description: 'SPU-ADPCM sample body; boundaries described by the paired .HED.' },
+  exe: { name: 'PSX Executable (PS-X EXE)', description: 'PlayStation executable/overlay code — not a movie. FMV videos are the .STR files.' },
+  str: { name: 'PSX Video Stream (STR)', description: 'MDEC/XA streamed FMV video. Playback needs an MDEC decoder (not yet implemented).' },
 };
 
 function hex(n: number, width = 0): string {
@@ -180,6 +185,26 @@ export function interpretContainer(
   return { kind: 'archive', entries, format: formatName };
 }
 
+/**
+ * Interpret a `.HED` sound-bank header. RE1's HED is a Capcom-specific header
+ * (not a standard VAB) paired with a `.VB` body; we surface its leading word
+ * table so the sample layout is inspectable rather than hex-only.
+ */
+export function interpretHed(bytes: Uint8Array): StructuredAsset {
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const wordCount = Math.min(32, Math.floor(buf.length / 4));
+  const fields: StructuredField[] = [];
+  for (let i = 0; i < wordCount; i++) {
+    fields.push({ label: `word[${i}] @${hex(i * 4)}`, value: hex(buf.readUInt32LE(i * 4)) });
+  }
+  return {
+    kind: 'structured',
+    format: RE1_FORMATS.hed.name,
+    summary: `${RE1_FORMATS.hed.description} Pairs with the same-named .VB body.`,
+    sections: [overviewSection(bytes), { title: 'Header words', fields }],
+  };
+}
+
 /** Generic "identified but not fully decoded" fallback. */
 export function identifiedSummary(bytes: Uint8Array, ext: string): StructuredAsset {
   const meta = RE1_FORMATS[ext];
@@ -211,10 +236,13 @@ export function interpretRe1(
       return interpretContainer(bytes, node, RE1_FORMATS.dat.name);
     case 'stf':
       return interpretStf(bytes);
-    case 'dor':
+    case 'hed':
+      return interpretHed(bytes);
     case 'pix':
     case 'esp':
     case 'emw':
+    case 'exe':
+    case 'str':
       return identifiedSummary(bytes, ext);
     default:
       return null;

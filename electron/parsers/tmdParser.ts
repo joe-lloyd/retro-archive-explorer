@@ -240,7 +240,9 @@ export function findEmbeddedTexture(buffer: Buffer): ModelTexture | undefined {
 
 /** Dispatch by extension and wrap the result as a ModelAsset. */
 export function parseModel(buffer: Buffer, extension: string | undefined): ModelAsset {
-  if (extension === 'emd' || extension === 'ivm') {
+  // EMD/IVM/DOR embed one or more TMD blocks at non-zero offsets (plus a TIM),
+  // so they use the scanning parser; a bare .TMD has its header at offset 0.
+  if (extension === 'emd' || extension === 'ivm' || extension === 'dor') {
     const objects = parseEmd(buffer);
     const texture = findEmbeddedTexture(buffer);
     return { kind: 'model', objects, texture, sourceExt: extension };

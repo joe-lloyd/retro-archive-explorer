@@ -4,14 +4,14 @@ import { mountImage, type NodeDescriptor } from './parsers/isoParser';
 import { parseTim } from './parsers/timParser';
 import { parseModel } from './parsers/tmdParser';
 import { parseAudio } from './parsers/audio/psxAudio';
-import { interpretRe1 } from './parsers/re1/registry';
+import { interpretRe1, identifiedSummary } from './parsers/re1/registry';
 
 /** How to physically locate a node's bytes. */
 type Descriptor =
   | ({ kind: 'disc' } & NodeDescriptor)
   | { kind: 'sub'; parentId: string; offset: number; size: number };
 
-const MODEL_EXT = new Set(['tmd', 'emd', 'ivm']);
+const MODEL_EXT = new Set(['tmd', 'emd', 'ivm', 'dor']);
 const AUDIO_EXT = new Set(['vag', 'vab', 'xa', 'vb', 'vh', 'wav', 'snd', 'adp']);
 
 /** Holds the state for one mounted disc image. */
@@ -69,7 +69,19 @@ export class MountSession {
     const bytes = this.readNodeBytes(nodeId);
 
     if (ext === 'tim') return parseTim(bytes);
-    if (ext && MODEL_EXT.has(ext)) return parseModel(bytes, ext);
+    if (ext && MODEL_EXT.has(ext)) {
+      try {
+        return parseModel(bytes, ext);
+      } catch (err) {
+        // Graceful fallback: show identified info + the reason instead of a hard
+        // error (notably EMD, whose skeleton container we don't fully assemble yet).
+        const info = identifiedSummary(new Uint8Array(bytes), ext);
+        return {
+          ...info,
+          summary: `${info.summary} (could not build geometry: ${err instanceof Error ? err.message : String(err)})`,
+        };
+      }
+    }
     if (ext && AUDIO_EXT.has(ext)) return parseAudio(bytes, ext);
 
     // RE1 engine formats (RDT/DAT/camera/STF/...): structured or archive.
