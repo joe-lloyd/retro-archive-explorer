@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext ts,tsx",
     "icons": "node scripts/gen-icons.mjs",
+    "analyze": "node scripts/analyze.mjs",
     "dist": "electron-vite build && electron-builder",
     "release": "electron-vite build && electron-builder --publish always"
   },
@@ -29,6 +30,7 @@
     "electron": "^30.0.6",
     "electron-builder": "^24.13.3",
     "electron-vite": "^5.0.0",
+    "esbuild": "0.21.5",
     "eslint": "^8.57.0",
     "lucide-react": "^0.378.0",
     "png-to-ico": "^2.1.8",

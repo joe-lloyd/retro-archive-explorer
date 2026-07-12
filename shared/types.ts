@@ -57,6 +57,8 @@ export interface ModelAsset {
   objects: MeshObject[];
   /** Shared texture (from an embedded/adjacent TIM), when resolved. */
   texture?: ModelTexture;
+  /** Source extension (tmd/emd/ivm), used to apply per-format orientation fixes. */
+  sourceExt?: string;
 }
 
 /** One field in a structured interpretation. */

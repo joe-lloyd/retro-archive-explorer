@@ -74,9 +74,15 @@ export function ModelViewer({ asset }: { asset: ModelAsset }) {
       disposables.push(material);
       group.add(new THREE.Mesh(geometry, material));
     }
+    // Orientation fix: IVM item models come in upside-down and rotated 90°.
+    // (Targeted to IVM so TMD/EMD, which look correct, aren't regressed.)
+    if (asset.sourceExt === 'ivm') {
+      group.rotation.x = Math.PI;
+      group.rotation.z = Math.PI / 2;
+    }
     scene.add(group);
 
-    // Frame the model.
+    // Frame the model (bounds computed after the orientation fix).
     const box = new THREE.Box3().setFromObject(group);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length() || 100;

@@ -243,9 +243,9 @@ export function parseModel(buffer: Buffer, extension: string | undefined): Model
   if (extension === 'emd' || extension === 'ivm') {
     const objects = parseEmd(buffer);
     const texture = findEmbeddedTexture(buffer);
-    return { kind: 'model', objects, texture };
+    return { kind: 'model', objects, texture, sourceExt: extension };
   }
   const objects = parseTmd(buffer);
   const texture = findEmbeddedTexture(buffer);
-  return { kind: 'model', objects, texture };
+  return { kind: 'model', objects, texture, sourceExt: extension };
 }
