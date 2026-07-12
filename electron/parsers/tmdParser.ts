@@ -155,15 +155,28 @@ function decodePrimitive(
   }
 }
 
-/** Parse one TMD blob into mesh objects (expanded, colored geometry). */
+/**
+ * Parse a TMD blob (or an RE1 EMD object-mesh section) into mesh objects.
+ * Standard TMD headers are `[id=0x41, flags, nobj]`; RE1's EMD mesh section uses
+ * the same object/primitive layout but an id-less `[length, unknown, nobj]`
+ * header — both have a 12-byte header, 28-byte object entries, and base=12.
+ */
 export function parseTmd(buffer: Buffer, namePrefix = 'object'): MeshObject[] {
   const r = new BinaryReader(buffer);
-  if (r.u32() !== TMD_ID) throw new Error('invalid TMD id');
-  const flags = r.u32();
-  const nobj = r.u32();
+  const w0 = r.u32();
+  let nobj: number;
+  let base: number;
+  if (w0 === TMD_ID) {
+    const flags = r.u32();
+    nobj = r.u32();
+    base = (flags & 0x01) !== 0 ? 0 : HEADER_SIZE; // FIXP: absolute vs header-relative
+  } else {
+    r.u32(); // unknown
+    nobj = r.u32();
+    base = HEADER_SIZE;
+  }
   if (nobj === 0 || nobj > MAX_OBJECTS) throw new Error(`implausible object count ${nobj}`);
 
-  const base = (flags & 0x01) !== 0 ? 0 : HEADER_SIZE; // FIXP: pointers absolute vs header-relative
   r.seek(HEADER_SIZE);
   const table = readObjectTable(r, nobj, base);
 
@@ -200,7 +213,39 @@ export function parseTmd(buffer: Buffer, namePrefix = 'object'): MeshObject[] {
   return meshes;
 }
 
-/** Parse an `.EMD` by decoding each embedded TMD block into distinct meshes. */
+/**
+ * Parse a Resident Evil 1 `.EMD` via its real container layout: a directory of
+ * four little-endian offsets at `filesize - 16` pointing to
+ * `[skeleton, animation, mesh, texture]`. The mesh section is a TMD-style object
+ * mesh (id-less for enemies), and the texture is an embedded TIM.
+ * (Format: pmandin/reevengi-tools wiki, ".EMD (Resident Evil)".)
+ */
+export function parseEmdContainer(buffer: Buffer): ModelAsset {
+  if (buffer.length < 32) throw new Error('EMD too small for a directory');
+  const dirOff = buffer.length - 16;
+  const dir = [0, 1, 2, 3].map((i) => buffer.readUInt32LE(dirOff + i * 4));
+  const [skel, anim, mesh, tim] = dir;
+  // Directory must be ascending offsets inside the file.
+  if (!(skel < anim && anim < mesh && mesh < tim && tim < buffer.length)) {
+    throw new Error('EMD directory offsets are not a valid ascending table');
+  }
+  void skel;
+  void anim;
+
+  const objects = parseTmd(buffer.subarray(mesh, tim), 'part');
+  if (objects.length === 0) throw new Error('EMD mesh section produced no geometry');
+
+  let texture: ModelTexture | undefined;
+  try {
+    const tex = parseTim(buffer.subarray(tim));
+    texture = { width: tex.width, height: tex.height, pixels: tex.pixels };
+  } catch {
+    texture = undefined;
+  }
+  return { kind: 'model', objects, texture, sourceExt: 'emd' };
+}
+
+/** Parse an `.EMD`/`.IVM`/`.DOR` by scanning for embedded TMD blocks. */
 export function parseEmd(buffer: Buffer): MeshObject[] {
   const meshes: MeshObject[] = [];
   let block = 0;
@@ -240,9 +285,12 @@ export function findEmbeddedTexture(buffer: Buffer): ModelTexture | undefined {
 
 /** Dispatch by extension and wrap the result as a ModelAsset. */
 export function parseModel(buffer: Buffer, extension: string | undefined): ModelAsset {
-  // EMD/IVM/DOR embed one or more TMD blocks at non-zero offsets (plus a TIM),
-  // so they use the scanning parser; a bare .TMD has its header at offset 0.
-  if (extension === 'emd' || extension === 'ivm' || extension === 'dor') {
+  // EMD uses its real directory container (mesh + texture located precisely).
+  if (extension === 'emd') {
+    return parseEmdContainer(buffer);
+  }
+  // IVM/DOR embed TMD blocks at non-zero offsets (plus a TIM); scan for them.
+  if (extension === 'ivm' || extension === 'dor') {
     const objects = parseEmd(buffer);
     const texture = findEmbeddedTexture(buffer);
     return { kind: 'model', objects, texture, sourceExt: extension };

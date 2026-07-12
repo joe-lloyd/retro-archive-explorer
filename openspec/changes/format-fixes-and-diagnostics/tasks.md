@@ -17,13 +17,13 @@
 - [x] 3.1 Apply an up-axis (Y-down→Y-up) correction on the model group in `ModelViewer` (scoped to IVM to avoid regressing TMD/EMD)
 - [x] 3.2 Add the IVM-specific rotation fix, keyed off the asset's source extension (exact angles to confirm visually)
 
-## 4. EMD reconstruction (evidence-driven) — PAUSED, needs visual-feedback loop
+## 4. EMD reconstruction (evidence-driven) — SOLVED via container directory
 
-- [x] 4.1 From diagnostics, map the EMD section directory (findings: shared skeleton header for humanoids, EOF offset table incl. texture ptr; full layout not yet resolved)
-- [ ] 4.2 Parse the skeleton hierarchy and accumulate per-bone offsets
-- [ ] 4.3 Position each mesh part at its bone offset; retain colors/texture; assemble the character
-- [x] 4.4 Graceful fallback: EMDs that fail to build geometry now show identified structured info + reason instead of a hard error
-- [ ] 4.5 Re-run the analyzer/app on several EMDs to confirm correct assembly
+- [x] 4.1 Mapped the EMD directory: 4 LE offsets at `filesize-16` → [skeleton, animation, mesh, texture] (source: pmandin/reevengi-tools wiki)
+- [x] 4.2 Skeleton hierarchy decoded (armature = humanoid child tree) — but NOT needed for rest pose: mesh vertices are pre-positioned in world space
+- [x] 4.3 Mesh located precisely at offset[2] (TMD `0x41` for chars, id-less `[length,unknown,nobj]` for enemies); texture at offset[3]; parts assemble with distinct symmetric centroids
+- [x] 4.4 Replaced the false-positive TMD scan with directory parsing (no more "no TMD blocks"); graceful fallback retained
+- [x] 4.5 Verified on CHAR10 (16 parts), EM1000 (15 parts, previously failed), EM100E (1 part) — all parse + textured (in-app visual confirmation pending)
 
 ## 5. Audio playback fix
 
@@ -41,6 +41,11 @@
 - [x] 7.1 Parse `.DOR` geometry (renders: 12 objects / 697 tris, textured); animation/keyframe data not yet decoded
 - [ ] 7.2 Add a `DoorViewer` that plays the transition animation (currently renders statically in the model viewer)
 - [x] 7.3 Route `.DOR` to the model viewer
+
+## 7b. HSB sound files (added)
+
+- [ ] 7b.1 Analyze `.HSB` sound files and determine their format/relationship to HED/VB
+- [ ] 7b.2 Interpret/play `.HSB` (structured info at minimum, playback if feasible)
 
 ## 8. EXE / FMV investigation
 
