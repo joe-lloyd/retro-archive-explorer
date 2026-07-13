@@ -4,7 +4,7 @@ import { mountImage, type NodeDescriptor } from './parsers/isoParser';
 import { parseTim } from './parsers/timParser';
 import { parseModel } from './parsers/tmdParser';
 import { parseAudio } from './parsers/audio/psxAudio';
-import { interpretRe1, identifiedSummary } from './parsers/re1/registry';
+import { interpretRe1, interpretVab, identifiedSummary } from './parsers/re1/registry';
 
 /** How to physically locate a node's bytes. */
 type Descriptor =
@@ -12,7 +12,7 @@ type Descriptor =
   | { kind: 'sub'; parentId: string; offset: number; size: number };
 
 const MODEL_EXT = new Set(['tmd', 'emd', 'ivm', 'dor']);
-const AUDIO_EXT = new Set(['vag', 'vab', 'xa', 'vb', 'vh', 'wav', 'snd', 'adp']);
+const AUDIO_EXT = new Set(['vag', 'xa', 'vb', 'vh', 'wav', 'snd', 'adp']);
 
 /** Holds the state for one mounted disc image. */
 export class MountSession {
@@ -83,6 +83,13 @@ export class MountSession {
       }
     }
     if (ext && AUDIO_EXT.has(ext)) return parseAudio(bytes, ext);
+
+    // VAB sound bank -> expandable list of playable samples.
+    if (ext === 'vab') {
+      const arch = interpretVab(new Uint8Array(bytes), node);
+      this.registerEntries(nodeId, node, arch.entries);
+      return arch;
+    }
 
     // RE1 engine formats (RDT/DAT/camera/STF/...): structured or archive.
     const re1 = interpretRe1(ext, node, new Uint8Array(bytes));

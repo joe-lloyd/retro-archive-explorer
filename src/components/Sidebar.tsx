@@ -14,7 +14,7 @@ interface SidebarProps {
   onSelect: (node: VirtualNode) => void;
 }
 
-const CONTAINER_EXT = new Set(['rdt', 'dat']);
+const CONTAINER_EXT = new Set(['rdt', 'dat', 'vab']);
 
 function isContainer(node: VirtualNode): boolean {
   return node.type === 'file' && !!node.extension && CONTAINER_EXT.has(node.extension);

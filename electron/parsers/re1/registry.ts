@@ -7,6 +7,7 @@ import type {
   VirtualNode,
 } from '../../../shared/types';
 import { unpackContainer } from '../rdtParser';
+import { vabSamples } from '../audio/psxAudio';
 
 /** Human-readable metadata for each recognized RE1 engine extension. */
 export const RE1_FORMATS: Record<string, { name: string; description: string }> = {
@@ -208,6 +209,25 @@ export function interpretHed(bytes: Uint8Array): StructuredAsset {
     summary: `${RE1_FORMATS.hed.description} Pairs with the same-named .VB body.`,
     sections: [overviewSection(bytes), { title: 'Header words', fields }],
   };
+}
+
+/** Interpret a VAB sound bank as an expandable list of playable samples. */
+export function interpretVab(bytes: Uint8Array, node: VirtualNode): ArchiveAsset {
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const samples = vabSamples(buf);
+  const entries: VirtualNode[] = samples.map((s, i) => {
+    const name = `sample_${String(i).padStart(2, '0')}.vb`;
+    return {
+      id: `${node.id}:vab${i}`,
+      name,
+      path: `${node.path}/${name}`,
+      type: 'file' as const,
+      extension: 'vb', // raw SPU-ADPCM -> decoded on play
+      size: s.size,
+      offset: s.offset,
+    };
+  });
+  return { kind: 'archive', entries, format: 'VAB Sound Bank' };
 }
 
 /** Generic "identified but not fully decoded" fallback. */
