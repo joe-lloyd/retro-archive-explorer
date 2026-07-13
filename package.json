@@ -1,6 +1,6 @@
 {
   "name": "retro-archive-explorer",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Electron application for extracting and inspecting legacy retro engine formats",
   "main": "./out/main/main.js",
   "type": "module",
