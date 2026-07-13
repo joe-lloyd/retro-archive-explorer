@@ -2,8 +2,6 @@
 
 A walkthrough of Retro Archive Explorer, from opening a disc image to previewing each kind of asset.
 
-> **Screenshots:** the images below are placeholders. See [Capturing screenshots](#capturing-screenshots) at the end to replace them with real ones.
-
 ## 1. The home screen
 
 When the app launches with nothing open, you land on the **home screen**. It shows:
@@ -63,16 +61,3 @@ Decoded to playable audio with a waveform. Formats that can't be decoded yet (st
 Interpreted into a structured view — named sections, camera records, decoded text — so you can see what a file *is*. RDT rooms expand into their sections (background texture, sound, collision, …), each previewable on its own.
 
 ![Structured viewer](img/structured.png)
-
----
-
-## Capturing screenshots
-
-To replace the placeholders:
-
-1. Run the app: `pnpm dev`.
-2. Open a disc image and navigate to each view above.
-3. Capture the window (Windows: `Win`+`Shift`+`S`; macOS: `Cmd`+`Shift`+`4`).
-4. Save PNGs into `docs/img/` using the file names referenced above (`home.png`, `explorer.png`, `texture.png`, `model.png`, `audio.png`, `structured.png`).
-
-The Markdown already points at those paths, so the guide fills in as you add them.
