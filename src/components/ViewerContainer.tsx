@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { ParsedAsset, VirtualNode } from '../../shared/types';
-import { useAsset, useRawBytes } from '../hooks/useIPC';
+import { useAsset, useRawBytes, useDisasm } from '../hooks/useIPC';
 import { TextureViewer } from './viewers/TextureViewer';
 import { ModelViewer } from './viewers/ModelViewer';
 import { AudioViewer } from './viewers/AudioViewer';
@@ -9,7 +9,21 @@ import { ArchiveViewer } from './viewers/ArchiveViewer';
 import { StructuredViewer } from './viewers/StructuredViewer';
 import { RawView } from './viewers/RawView';
 
-type Tab = 'preview' | 'hex' | 'text';
+type Tab = 'preview' | 'hex' | 'text' | 'disasm';
+
+function RevTab({ node }: { node: VirtualNode }) {
+  const { text, loading, error } = useDisasm(node, true);
+  if (loading) {
+    return (
+      <div className="viewer-state">
+        <Loader2 className="spin" size={20} /> Disassembling…
+      </div>
+    );
+  }
+  if (error) return <div className="viewer-state error">{error}</div>;
+  if (!text) return <div className="viewer-state">No disassembly.</div>;
+  return <pre className="text-content">{text}</pre>;
+}
 
 interface Props {
   node: VirtualNode | null;
@@ -80,18 +94,23 @@ export function ViewerContainer({ node, onOpen }: Props) {
     return <main className="viewer"><div className="viewer-state">Select a file to preview it.</div></main>;
   }
 
+  // The reverse-engineer tab is available for PSX executables.
+  const canDisasm = node.extension === 'exe';
+  const tabs: Tab[] = canDisasm ? ['preview', 'hex', 'text', 'disasm'] : ['preview', 'hex', 'text'];
+  const label: Record<Tab, string> = { preview: 'Preview', hex: 'Hex', text: 'Text', disasm: 'Disasm' };
+
   return (
     <main className="viewer">
       <div className="viewer-header">
         <span className="viewer-title">{node.path}</span>
         <div className="viewer-tabs">
-          {(['preview', 'hex', 'text'] as Tab[]).map((t) => (
+          {tabs.map((t) => (
             <button
               key={t}
               className={`viewer-tab${tab === t ? ' active' : ''}`}
               onClick={() => setTab(t)}
             >
-              {t === 'preview' ? 'Preview' : t === 'hex' ? 'Hex' : 'Text'}
+              {label[t]}
             </button>
           ))}
         </div>
@@ -100,6 +119,7 @@ export function ViewerContainer({ node, onOpen }: Props) {
         {tab === 'preview' && <PreviewTab node={node} onOpen={onOpen} />}
         {tab === 'hex' && <RawTab node={node} mode="hex" />}
         {tab === 'text' && <RawTab node={node} mode="text" />}
+        {tab === 'disasm' && <RevTab node={node} />}
       </div>
     </main>
   );

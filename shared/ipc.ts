@@ -10,6 +10,7 @@ export const IpcChannels = {
   closeArchive: 'archive:close',
   readNode: 'node:read',
   parseAsset: 'asset:parse',
+  disassemble: 'node:disasm',
   recentList: 'recent:list',
   recentRemove: 'recent:remove',
   recentClear: 'recent:clear',
@@ -25,6 +26,10 @@ export interface ReadNodeRequest {
 }
 
 export interface ParseAssetRequest {
+  nodeId: string;
+}
+
+export interface DisassembleRequest {
   nodeId: string;
 }
 
@@ -48,6 +53,8 @@ export interface RetroBridge {
   readNode(req: ReadNodeRequest): Promise<Result<Uint8Array>>;
   /** Parse a node into a viewer-ready asset. */
   parseAsset(req: ParseAssetRequest): Promise<Result<ParsedAsset>>;
+  /** Disassemble a PS-X EXE node into a MIPS listing. */
+  disassemble(req: DisassembleRequest): Promise<Result<string>>;
   /** List persisted recent files (missing files pruned). */
   recentList(): Promise<Result<RecentFile[]>>;
   /** Remove a single recent entry by path. */

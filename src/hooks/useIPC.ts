@@ -130,3 +130,27 @@ export function useRawBytes(node: VirtualNode | null, enabled: boolean) {
 
   return { bytes: state.data, loading: state.loading, error: state.error };
 }
+
+/** Disassemble a PS-X EXE node, lazily (only when `enabled`). */
+export function useDisasm(node: VirtualNode | null, enabled: boolean) {
+  const [state, setState] = useState<AsyncState<string>>({ data: null, loading: false, error: null });
+
+  useEffect(() => {
+    if (!node || node.type !== 'file' || !enabled) return;
+    let cancelled = false;
+    setState({ data: null, loading: true, error: null });
+    window.retro
+      .disassemble({ nodeId: node.id })
+      .then((res) => {
+        if (!cancelled) setState({ data: unwrap(res), loading: false, error: null });
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setState({ data: null, loading: false, error: err.message });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [node, enabled]);
+
+  return { text: state.data, loading: state.loading, error: state.error };
+}

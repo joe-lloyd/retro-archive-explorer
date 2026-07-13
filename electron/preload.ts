@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannels } from '../shared/ipc';
 import type {
+  DisassembleRequest,
   OpenRecentRequest,
   ParseAssetRequest,
   ReadNodeRequest,
@@ -27,6 +28,9 @@ const bridge: RetroBridge = {
   },
   parseAsset(req: ParseAssetRequest): Promise<Result<ParsedAsset>> {
     return ipcRenderer.invoke(IpcChannels.parseAsset, req);
+  },
+  disassemble(req: DisassembleRequest): Promise<Result<string>> {
+    return ipcRenderer.invoke(IpcChannels.disassemble, req);
   },
   recentList(): Promise<Result<RecentFile[]>> {
     return ipcRenderer.invoke(IpcChannels.recentList);

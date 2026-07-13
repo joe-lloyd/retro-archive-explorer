@@ -3,12 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type {
+  DisassembleRequest,
   OpenRecentRequest,
   ParseAssetRequest,
   ReadNodeRequest,
   RemoveRecentRequest,
 } from '../shared/ipc';
 import { IpcChannels } from '../shared/ipc';
+import { disassembleExe } from './parsers/exe/mipsDisasm';
 import type { ParsedAsset, RecentFile, Result, VirtualNode } from '../shared/types';
 import { MountSession } from './session';
 import { RecentFilesStore } from './recentFiles';
@@ -122,6 +124,16 @@ function registerIpc(): void {
         if (!session) throw new Error('no archive mounted');
         if (typeof req?.nodeId !== 'string') throw new Error('invalid nodeId');
         return session.parseAsset(req.nodeId);
+      }),
+  );
+
+  ipcMain.handle(
+    IpcChannels.disassemble,
+    async (_e, req: DisassembleRequest): Promise<Result<string>> =>
+      guard(() => {
+        if (!session) throw new Error('no archive mounted');
+        if (typeof req?.nodeId !== 'string') throw new Error('invalid nodeId');
+        return disassembleExe(session.readNodeBytes(req.nodeId));
       }),
   );
 
