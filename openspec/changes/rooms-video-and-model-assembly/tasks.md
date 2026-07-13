@@ -15,9 +15,9 @@
 
 ## 3. STR video decode
 
-- [ ] 3.1 Analyze `.STR` (e.g. CAPCOM.STR) sector/sub-header layout; confirm width/height/frame framing
-- [ ] 3.2 Demux sectors into per-frame bitstreams
-- [ ] 3.3 Implement MDEC decode (BS/RLE + IDCT + YUV→RGB) → RGBA frames in `video/str.ts`
+- [x] 3.1 Confirmed STR framing: 2048-byte sectors, 32-byte sub-header (magic 0x0160/0x8001, frameNum, dataBytes, w/h). CAPCOM.STR = 160 frames, 320x240, BS v2, qscale 8
+- [x] 3.2 Demux sectors into per-frame bitstreams (`demuxStr`) — verified correct
+- [~] 3.3 MDEC decode implemented (bit reader, AC VLC, IDCT, YUV→RGB) but block decode desyncs after the first MB row — DC coding / bit order needs another iteration
 - [ ] 3.4 Report unsupported variants with a clear reason
 - [ ] 3.5 Unit-test the decoder on a small known frame
 
