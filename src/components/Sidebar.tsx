@@ -75,9 +75,10 @@ export function Sidebar({ root, selectedId, onSelect }: SidebarProps) {
         setLoadingId(node.id);
         const res = await window.retro.parseAsset({ nodeId: node.id });
         setLoadingId(null);
-        if (res.ok && res.value.kind === 'archive') {
-          setChildrenCache((m) => new Map(m).set(node.id, res.value.kind === 'archive' ? res.value.entries : []));
-        }
+        // On failure stay collapsed; selecting the node shows the parse error.
+        if (!res.ok || res.value.kind !== 'archive') return;
+        const entries = res.value.entries;
+        setChildrenCache((m) => new Map(m).set(node.id, entries));
       }
       setExpanded((s) => new Set(s).add(node.id));
     },

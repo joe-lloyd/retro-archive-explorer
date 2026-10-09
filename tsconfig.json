@@ -18,5 +18,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src", "electron", "shared", "electron.vite.config.ts"]
+  "include": ["src", "electron", "shared", "scripts", "electron.vite.config.ts"]
 }
