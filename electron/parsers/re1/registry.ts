@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/types';
 import { unpackContainer } from '../rdtParser';
 import { vabSamples } from '../audio/psxAudio';
+import { parseRdt1 } from './rdt1';
 
 /** Human-readable metadata for each recognized RE1 engine extension. */
 export const RE1_FORMATS: Record<string, { name: string; description: string }> = {
@@ -57,71 +58,35 @@ function overviewSection(bytes: Uint8Array): StructuredSection {
   };
 }
 
-const RDT_HEADER_SIZE = 0x40; // reevengi: 16-byte header + 3×16-byte parts
-const RDT_MAX_SLOTS = 24;
-
-/** Identify a section by its content magic so it can be previewed correctly. */
-function classifyRdtSection(buf: Buffer, offset: number): { label: string; ext: string } {
-  if (offset + 4 > buf.length) return { label: 'data', ext: 'bin' };
-  const u = buf.readUInt32LE(offset);
-  if (u === 0x41) return { label: 'model', ext: 'tmd' };
-  if (u === 0x10) return { label: 'texture', ext: 'tim' };
-  if (u === 0x56414270) return { label: 'sound', ext: 'vab' }; // 'pBAV'
-  return { label: 'data', ext: 'bin' };
+/** Extension for an RDT section, so embedded models, textures and sounds open in their viewers. */
+function sectionExt(name: string, buf: Buffer, offset: number): string {
+  const dot = name.lastIndexOf('.');
+  const ext = name.slice(dot + 1);
+  if (['tim', 'tmd', 'vh', 'vb', 'scd'].includes(ext)) return ext;
+  if (offset + 4 <= buf.length && buf.readUInt32LE(offset) === 0x10) return 'tim';
+  return 'bin';
 }
 
 /**
- * Interpret an RDT room file as an expandable archive of its sections, from the
- * header offset table at 0x40 (reevengi: RE1 RDT has a 64-byte header). Each
- * in-file pointer becomes a sub-file, typed by its content magic so embedded
- * models (TMD) and textures (TIM) render and the sound bank (VAB) is identified.
+ * Interpret an RE1 room file as an expandable archive of its sections, using
+ * the RE1 RDT layout (offset table at 0x48, cameras at 0x94; see rdt1.ts).
  */
 export function interpretRdt(bytes: Uint8Array, node: VirtualNode): ArchiveAsset {
   const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-
-  // Collect distinct, in-file pointers from the offset table.
-  const seen = new Set<number>();
-  const ptrs: { slot: number; offset: number }[] = [];
-  for (let i = 0; i < RDT_MAX_SLOTS; i++) {
-    const at = RDT_HEADER_SIZE + i * 4;
-    if (at + 4 > buf.length) break;
-    const ptr = buf.readUInt32LE(at);
-    if (ptr <= RDT_HEADER_SIZE || ptr >= buf.length || seen.has(ptr)) continue;
-    seen.add(ptr);
-    ptrs.push({ slot: i, offset: ptr });
-  }
-
-  // Section size = gap to the next pointer (by file order).
-  const byOffset = [...ptrs].sort((a, b) => a.offset - b.offset);
-  const sizeOf = new Map<number, number>();
-  byOffset.forEach((p, i) => {
-    const end = i + 1 < byOffset.length ? byOffset[i + 1].offset : buf.length;
-    sizeOf.set(p.offset, Math.max(0, end - p.offset));
-  });
-
-  const entries: VirtualNode[] = ptrs
-    .map(({ slot: s, offset }) => {
-      const { label, ext } = classifyRdtSection(buf, offset);
-      let size = sizeOf.get(offset) ?? 0;
-      // A VAB header's body follows it contiguously; span the whole bank (fsize)
-      // so it can be split into samples and played.
-      if (ext === 'vab' && offset + 0x10 <= buf.length) {
-        const fsize = buf.readUInt32LE(offset + 0x0c);
-        if (fsize > size && offset + fsize <= buf.length) size = fsize;
-      }
-      const name = `${String(s).padStart(2, '0')}_${label}.${ext}`;
+  const entries: VirtualNode[] = parseRdt1(bytes)
+    .sections.filter((s) => s.size > 0)
+    .map((s, i) => {
+      const name = `${String(i).padStart(2, '0')}_${s.name}`;
       return {
-        id: `${node.id}:s${s}`,
+        id: `${node.id}:s${i}`,
         name,
         path: `${node.path}/${name}`,
         type: 'file' as const,
-        extension: ext,
-        size,
-        offset,
+        extension: sectionExt(s.name, buf, s.offset),
+        size: s.size,
+        offset: s.offset,
       };
-    })
-    .filter((e) => e.size > 0);
-
+    });
   return { kind: 'archive', entries, format: RE1_FORMATS.rdt.name };
 }
 
