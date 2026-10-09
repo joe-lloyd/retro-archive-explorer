@@ -56,7 +56,11 @@ function openDisc(image: string): Disc {
 }
 
 function readFile(disc: Disc, file: DiscFile): Buffer {
-  return disc.reader.readLogical(file.lba, file.size);
+  const bytes = disc.reader.readLogical(file.lba, file.size);
+  if (bytes.length !== file.size) {
+    throw new Error(`${file.node.path}: image ends after ${bytes.length} of ${file.size} bytes`);
+  }
+  return bytes;
 }
 
 function findFile(disc: Disc, query: string): DiscFile {
@@ -68,9 +72,9 @@ function findFile(disc: Disc, query: string): DiscFile {
   return hit;
 }
 
+/** Stop with a message. The top level prints it and sets the exit code. */
 function fail(message: string): never {
-  console.error(message);
-  process.exit(1);
+  throw new Error(message);
 }
 
 /** `<image> <path>` reads from the disc; a lone existing file path reads it directly. */
@@ -101,6 +105,24 @@ function hexDump(buf: Buffer, len: number): string {
   return rows.join('\n');
 }
 
+/** Every offset where a 4-byte little-endian magic appears. */
+function findMagic(buf: Buffer, magic: number, cap = 64): number[] {
+  const hits: number[] = [];
+  for (let i = 0; i + 4 <= buf.length && hits.length < cap; i += 4) {
+    if (buf.readUInt32LE(i) === magic) hits.push(i);
+  }
+  return hits;
+}
+
+function u32Table(buf: Buffer, count: number): { offset: number; value: number; hex: string }[] {
+  const rows = [];
+  for (let i = 0; i < count && (i + 1) * 4 <= buf.length; i++) {
+    const value = buf.readUInt32LE(i * 4);
+    rows.push({ offset: i * 4, value, hex: '0x' + value.toString(16) });
+  }
+  return rows;
+}
+
 function summarizeParse(ext: string | undefined, node: VirtualNode, bytes: Buffer): unknown {
   try {
     if (ext === 'tim') {
@@ -115,6 +137,7 @@ function summarizeParse(ext: string | undefined, node: VirtualNode, bytes: Buffe
         objects: m.objects.length,
         triangles: m.objects.reduce((n, o) => n + o.triangleCount, 0),
         textured: !!m.texture,
+        perObject: m.objects.map((o) => ({ name: o.name, tris: o.triangleCount, hasColor: !!o.colors, hasUv: !!o.uvs })),
       };
     }
     if (ext && ['vag', 'vab', 'vb', 'vh', 'xa', 'wav', 'snd', 'hed'].includes(ext)) {
@@ -122,7 +145,7 @@ function summarizeParse(ext: string | undefined, node: VirtualNode, bytes: Buffe
       return { ok: true, kind: 'audio', mime: a.mime, bytes: a.bytes.length, note: a.note };
     }
     const re1 = interpretRe1(ext, node, new Uint8Array(bytes));
-    if (re1) return { ok: true, kind: re1.kind };
+    if (re1) return { ok: true, kind: re1.kind, format: 'format' in re1 ? re1.format : undefined };
     return { ok: false, note: 'no parser for extension' };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -173,8 +196,11 @@ function scriptReport(rdt: Rdt1): string {
   return [...block('init', rdt.init), ...block('main', rdt.main)].join('\n\n') + '\n';
 }
 
-/** Write a converted copy next to the raw file when the format is understood. */
-function convert(ext: string | undefined, bytes: Buffer, dest: string): void {
+/**
+ * Write a converted copy next to the raw file when the format is understood.
+ * Returns errors from sections that failed inside a container.
+ */
+function convert(ext: string | undefined, bytes: Buffer, dest: string): string[] {
   if (ext === 'tim') {
     const t = parseTim(bytes);
     writeFileSync(`${dest}.png`, encodePng(t.width, t.height, t.pixels));
@@ -187,26 +213,32 @@ function convert(ext: string | undefined, bytes: Buffer, dest: string): void {
     });
   } else if (ext === 'rdt') {
     const rdt = parseRdt1(new Uint8Array(bytes));
+    const errors: string[] = [];
     const dir = `${dest}.d`;
     mkdirSync(dir, { recursive: true });
     for (const s of rdt.sections) {
       const part = bytes.subarray(s.offset, s.offset + s.size);
       const file = path.join(dir, `${s.offset.toString(16).padStart(6, '0')}_${s.name}`);
       writeFileSync(file, part);
-      if (s.name.endsWith('.tim')) tryConvert('tim', part, file);
+      if (s.name.endsWith('.tim')) errors.push(...tryConvert('tim', part, file).map((e) => `${s.name}: ${e}`));
     }
     writeFileSync(path.join(dir, 'script.c'), scriptReport(rdt));
     writeFileSync(path.join(dir, 'room.txt'), roomReport(path.basename(dest), rdt) + '\n');
     writeFileSync(path.join(dir, 'room.json'), JSON.stringify(rdt, (k, v) => (k === 'bytes' ? undefined : v), 2));
+    return errors;
   }
+  return [];
 }
 
-function tryConvert(ext: string | undefined, bytes: Buffer, dest: string): string | null {
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function tryConvert(ext: string | undefined, bytes: Buffer, dest: string): string[] {
   try {
-    convert(ext, bytes, dest);
-    return null;
+    return convert(ext, bytes, dest);
   } catch (err) {
-    return err instanceof Error ? err.message : String(err);
+    return [message(err)];
   }
 }
 
@@ -217,18 +249,22 @@ function extract(image: string, outDir: string): void {
     for (const file of disc.files) {
       const dest = path.join(outDir, file.node.path);
       mkdirSync(path.dirname(dest), { recursive: true });
-      const bytes = readFile(disc, file);
-      writeFileSync(dest, bytes);
-      const error = tryConvert(file.node.extension, bytes, dest);
-      if (error) {
-        failures++;
-        console.error(`convert failed: ${file.node.path}: ${error}`);
+      let errors: string[];
+      try {
+        const bytes = readFile(disc, file);
+        writeFileSync(dest, bytes);
+        errors = tryConvert(file.node.extension, bytes, dest);
+      } catch (err) {
+        errors = [message(err)];
       }
+      for (const error of errors) console.error(`failed: ${file.node.path}: ${error}`);
+      if (errors.length) failures++;
     }
   } finally {
     disc.reader.close();
   }
-  console.log(`extracted ${disc.files.length} files to ${outDir} (${failures} conversion failures)`);
+  console.log(`extracted ${disc.files.length} files to ${outDir} (${failures} with failures)`);
+  if (failures) process.exitCode = 1;
 }
 
 function roomsIndex(image: string): void {
@@ -250,7 +286,7 @@ function roomsIndex(image: string): void {
           ].join('  '),
         );
       } catch (err) {
-        console.log(`${file.node.path}  parse error: ${err instanceof Error ? err.message : String(err)}`);
+        console.log(`${file.node.path}  parse error: ${message(err)}`);
       }
     }
   } finally {
@@ -287,13 +323,21 @@ function main(): void {
         path: file.node.path,
         size: bytes.length,
         extension: file.node.extension,
+        magic: {
+          u32le: bytes.length >= 4 ? '0x' + bytes.readUInt32LE(0).toString(16) : '',
+          ascii: bytes.subarray(0, 8).toString('latin1').replace(/[^\x20-\x7e]/g, '.'),
+        },
+        headerU32Table: u32Table(bytes, 24),
+        tmdMagicAt: findMagic(bytes, 0x41),
+        timMagicAt: findMagic(bytes, 0x10),
         parse: summarizeParse(file.node.extension, file.node, bytes),
         hexHead: hexDump(bytes, 512),
       };
       mkdirSync('diagnostics', { recursive: true });
       writeFileSync(path.join('diagnostics', `${file.node.name}.json`), JSON.stringify(report, null, 2));
       writeFileSync(path.join('diagnostics', file.node.name), bytes);
-      console.log(JSON.stringify(report, null, 2));
+      console.log(`wrote diagnostics/${file.node.name}.json and diagnostics/${file.node.name}`);
+      console.log(JSON.stringify({ ...report, hexHead: '(in file)' }, null, 2));
       return;
     }
     case 'extract': {
@@ -323,4 +367,9 @@ function main(): void {
   }
 }
 
-main();
+try {
+  main();
+} catch (err) {
+  console.error(message(err));
+  process.exitCode = 1;
+}

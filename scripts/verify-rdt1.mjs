@@ -21,7 +21,9 @@ const item = [0x18, 1, ...s16(300), ...s16(400), ...s16(500), ...s16(500), 2, 15
 const door = [0x0c, 2, ...s16(10), ...s16(20), ...u16(30), ...u16(40), 0, 0, 0, 0, 0, (2 << 5) | 3, ...s16(1), ...s16(2), ...s16(3), ...s16(0), 0, 0];
 
 const initOps = [...enemy, ...item, 0x00, 0x00];
-const mainOps = [0x01, 0, 0x04, 7, 5, 1, ...door, 0x02, 0, 0x0e, 0, 0x03, 0, 0x00, 0];
+// if (ck) { door } else { bgm_play(3) } return. RE1 closes an else block at the
+// offset its length byte gives (else + bgm_play = 4 bytes), with no endif.
+const mainOps = [0x01, 0, 0x04, 7, 5, 1, ...door, 0x02, 4, 0x15, 3, 0x00, 0];
 const container = (ops) => [...u16(ops.length + 2), ...ops, ...u16(0)];
 
 const CAMERAS_AT = 0x94;
@@ -69,6 +71,7 @@ return;
 if (ck(FG_ITEM, 5, 1)) {
     door_aot_set(2, 10, 20, 30, 40, 0, 0, 0, 0, 0, ROOM_203, 1, 2, 3, 0, UNLOCKED, 0);
 } else {
+    bgm_play(3);
 }
 return;
 `;

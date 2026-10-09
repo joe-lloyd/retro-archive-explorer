@@ -88,6 +88,12 @@ function tableName(table: readonly string[], prefix: string, value: number): str
   return name ? name : `${prefix}${hex(value)}`;
 }
 
+/** A named constant when `value` is in `table`, otherwise the plain number. */
+function constArg(table: readonly string[], value: number): ScdArg {
+  const name = table[value];
+  return name ? { kind: 'name', value, name } : { kind: 'num', value };
+}
+
 /**
  * Room id byte as `ROOM_105`, matching the `ROOM1050.RDT` file stem. The top 3
  * bits are the stage number; 0 means "same stage as this room".
@@ -151,19 +157,19 @@ function decodeArgs(signature: string, bytes: Uint8Array, offset: number): ScdAr
         args.push({ kind: 'name', value, name: keyName(value) });
         break;
       case 's':
-        args.push({ kind: 'name', value, name: tableName(SCE_NAMES, 'SCE_', value) });
+        args.push(constArg(SCE_NAMES, value));
         break;
       case 'r':
         args.push({ kind: 'name', value, name: roomName(value) });
         break;
       case 'f':
-        args.push({ kind: 'name', value, name: tableName(FLAG_GROUPS, 'FG_', value) });
+        args.push(constArg(FLAG_GROUPS, value));
         break;
       case 'p':
         args.push({ kind: 'name', value, name: `event_${hex(value)}` });
         break;
       case 'w':
-        args.push({ kind: 'name', value, name: tableName(WORK_NAMES, 'WK_', value) });
+        args.push(constArg(WORK_NAMES, value));
         break;
       default:
         args.push({ kind: 'num', value });
@@ -219,17 +225,24 @@ function call(ins: ScdInstruction): string {
 
 /**
  * Render decoded instructions as indented pseudo-C. Conditions that follow an
- * `if` are joined with `&&`; `else` and `endif` open and close blocks.
+ * `if` are joined with `&&`. An `if` block closes at `endif`; an `else` block
+ * has no `endif` and closes at the offset its length byte points to, as in the
+ * reference decompiler.
  */
 export function formatScd1(instructions: readonly ScdInstruction[]): string {
   const lines: string[] = [];
-  let depth = 0;
+  // Open blocks, innermost last. An else block records where it ends.
+  const blocks: ({ kind: 'if' } | { kind: 'else'; end: number })[] = [];
   let pending: string[] | null = null;
-  const emit = (text: string) => lines.push(`${'    '.repeat(Math.max(0, depth))}${text}`);
+  const emit = (text: string) => lines.push(`${'    '.repeat(blocks.length)}${text}`);
+  const close = () => {
+    blocks.pop();
+    emit('}');
+  };
   const flushIf = () => {
     if (!pending) return;
     emit(`if (${pending.length ? pending.join(' && ') : 'true'}) {`);
-    depth++;
+    blocks.push({ kind: 'if' });
     pending = null;
   };
 
@@ -239,15 +252,17 @@ export function formatScd1(instructions: readonly ScdInstruction[]): string {
       continue;
     }
     flushIf();
+    for (let top = blocks.at(-1); top?.kind === 'else' && top.end <= ins.offset; top = blocks.at(-1)) close();
+
+    const label = ins.args[0];
     if (ins.opcode === OP_IF) {
       pending = [];
-    } else if (ins.opcode === OP_ELSE) {
-      depth--;
+    } else if (ins.opcode === OP_ELSE && label?.kind === 'label') {
+      if (blocks.length) blocks.pop();
       emit('} else {');
-      depth++;
+      blocks.push({ kind: 'else', end: label.target });
     } else if (ins.opcode === OP_ENDIF) {
-      depth--;
-      emit('}');
+      if (blocks.length) close();
     } else if (ins.opcode === 0x0e) {
       // nop
     } else if (ins.opcode === 0x00) {
@@ -257,9 +272,6 @@ export function formatScd1(instructions: readonly ScdInstruction[]): string {
     }
   }
   flushIf();
-  while (depth > 0) {
-    depth--;
-    emit('}');
-  }
+  while (blocks.length) close();
   return lines.join('\n');
 }

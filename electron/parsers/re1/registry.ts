@@ -58,13 +58,15 @@ function overviewSection(bytes: Uint8Array): StructuredSection {
   };
 }
 
-/** Extension for an RDT section, so embedded models, textures and sounds open in their viewers. */
+/**
+ * Extension for an RDT section, so embedded models, textures and sounds open in
+ * their viewers. Other sections keep their own extension (rid, pri, scd, ...)
+ * and fall through to the hex view.
+ */
 function sectionExt(name: string, buf: Buffer, offset: number): string {
-  const dot = name.lastIndexOf('.');
-  const ext = name.slice(dot + 1);
-  if (['tim', 'tmd', 'vh', 'vb', 'scd'].includes(ext)) return ext;
-  if (offset + 4 <= buf.length && buf.readUInt32LE(offset) === 0x10) return 'tim';
-  return 'bin';
+  const ext = name.slice(name.lastIndexOf('.') + 1);
+  if (ext !== 'bin') return ext;
+  return offset + 4 <= buf.length && buf.readUInt32LE(offset) === 0x10 ? 'tim' : 'bin';
 }
 
 /**

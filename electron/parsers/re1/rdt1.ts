@@ -112,10 +112,12 @@ function readEvents(bytes: Uint8Array, section: RdtSection | undefined): RdtSect
   if (!section) return [];
   const dv = view(bytes);
   const starts: number[] = [];
-  for (let at = section.offset; at + 4 <= section.offset + section.size; at += 4) {
+  // The table ends at a 0 entry, or where the first event begins.
+  for (let at = section.offset; at + 4 <= (starts[0] ?? section.offset + section.size); at += 4) {
     const rel = dv.getUint32(at, true);
-    if (rel === 0 || rel >= section.size) break;
-    starts.push(section.offset + rel);
+    const start = section.offset + rel;
+    if (rel === 0 || rel >= section.size || start <= (starts.at(-1) ?? at)) break;
+    starts.push(start);
   }
   return starts.map((offset, i) => ({
     name: `event_${i.toString(16).toUpperCase().padStart(2, '0')}`,
@@ -182,7 +184,7 @@ export function parseRdt1(bytes: Uint8Array): Rdt1 {
 
   // Every offset the file declares, with a name. Lengths come from sorting these.
   const named: { name: string; offset: number }[] = [
-    { name: 'header.dat', offset: 0 },
+    { name: 'header.hdr', offset: 0 },
     { name: 'light.lit', offset: 0x06 },
     { name: 'offsets.tbl', offset: OFFSETS_AT },
     { name: 'camera.rid', offset: CAMERAS_AT },
@@ -195,6 +197,19 @@ export function parseRdt1(bytes: Uint8Array): Rdt1 {
     const start = i === 14 || i === 15 ? offset - 7 * 4 : offset;
     if (inFile(start)) named.push({ name: SECTION_NAMES[i], offset: start });
   });
+  // ESP ids are 8 bytes; what follows is a separate (unnamed) chunk.
+  if (inFile(table[13])) named.push({ name: 'unknown.bin', offset: table[13] + 8 });
+  // Each ESP table holds 8 offsets to embedded effect scripts and textures.
+  for (const [i, ext] of [[14, 'eff'], [15, 'tim']] as const) {
+    const start = table[i] - 7 * 4;
+    if (!inFile(start) || start + 8 * 4 > bytes.length) continue;
+    for (let k = 0; k < 8; k++) {
+      const entry = dv.getInt32(start + k * 4, true);
+      if (entry !== -1 && (ext === 'tim' || entry !== 0) && inFile(entry)) {
+        named.push({ name: `esp${k}.${ext}`, offset: entry });
+      }
+    }
+  }
 
   const cameras: RdtCamera[] = [];
   for (let i = 0; i < header.cameras; i++) {
