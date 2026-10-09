@@ -46,7 +46,26 @@ pnpm lint       # eslint
 pnpm build      # electron-vite build -> out/ (main, preload, renderer)
 pnpm dist       # build + package installers for the current OS (electron-builder)
 pnpm icons      # regenerate build/icon.png + build/icon.ico from build/icon.svg
+pnpm verify:rdt1  # check the RE1 room and script decoder against a synthetic room
 ```
+
+## Command line
+
+`pnpm rae` runs the same parsers without the app.
+
+```bash
+pnpm rae list    re1.bin rdt              # list files, optionally by extension
+pnpm rae find    re1.bin ROOM10           # list files whose path matches
+pnpm rae extract re1.bin out/             # copy every file out and convert what it can
+pnpm rae rooms   re1.bin                  # one line per room: cameras, enemies, items, doors
+pnpm rae room    re1.bin ROOM1000.RDT     # cameras, placements and sections of one room
+pnpm rae script  re1.bin ROOM1000.RDT     # decompiled init and main room scripts
+pnpm rae dump    re1.bin ROOM1000.RDT     # diagnostics/<name>.json plus the raw bytes
+```
+
+`room` and `script` also take a single extracted `.RDT` path. `extract` writes TIM as PNG, VAG as WAV, and each VAB sample as its own WAV. Each room gets a `<name>.RDT.d/` folder with its sections, `script.c`, `room.txt` and `room.json`. STR and XA files are copied as 2048-byte user data, so their Form 2 sectors are not usable yet.
+
+The RE1 room layout and script opcodes are ported from [biohazard-utils](https://github.com/biorand/biohazard-utils) (MIT). Event scripts (cutscenes) are listed by offset but not decoded yet.
 
 The app is bundled with [electron-vite](https://electron-vite.org): `electron/main.ts` and `electron/preload.ts` compile to `out/main` and `out/preload`, and the React renderer (root `index.html` → `src/`) to `out/renderer`.
 
