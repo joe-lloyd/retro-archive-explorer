@@ -18,7 +18,7 @@ import { parseTim } from '../electron/parsers/timParser';
 import { parseModel } from '../electron/parsers/tmdParser';
 import { decodeAdpcm, decodeVag, parseAudio, pcmToWav, vabSamples } from '../electron/parsers/audio/psxAudio';
 import { interpretRe1 } from '../electron/parsers/re1/registry';
-import { parseRdt1, type Rdt1 } from '../electron/parsers/re1/rdt1';
+import { isEmptyRoomSlot, parseRdt1, type Rdt1 } from '../electron/parsers/re1/rdt1';
 import { formatScd1 } from '../electron/parsers/re1/scd1';
 import { encodePng } from './png';
 
@@ -211,7 +211,7 @@ function convert(ext: string | undefined, bytes: Buffer, dest: string): string[]
       const pcm = decodeAdpcm(bytes.subarray(s.offset, s.offset + s.size));
       writeFileSync(`${dest}.${String(i).padStart(3, '0')}.wav`, pcmToWav(pcm, 22050));
     });
-  } else if (ext === 'rdt') {
+  } else if (ext === 'rdt' && !isEmptyRoomSlot(bytes)) {
     const rdt = parseRdt1(new Uint8Array(bytes));
     const errors: string[] = [];
     const dir = `${dest}.d`;
@@ -272,7 +272,12 @@ function roomsIndex(image: string): void {
   try {
     for (const file of disc.files.filter((f) => f.node.extension === 'rdt')) {
       try {
-        const rdt = parseRdt1(new Uint8Array(readFile(disc, file)));
+        const bytes = new Uint8Array(readFile(disc, file));
+        if (isEmptyRoomSlot(bytes)) {
+          console.log(`${file.node.path}  empty room slot`);
+          continue;
+        }
+        const rdt = parseRdt1(bytes);
         const names = (kind: string) =>
           rdt.placements.flatMap((p) => (p.kind === kind && 'name' in p ? [p.name] : []));
         const doors = rdt.placements.flatMap((p) => (p.kind === 'door' ? [p.target] : []));

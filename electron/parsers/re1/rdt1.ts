@@ -168,7 +168,13 @@ function placementOf(ins: ScdInstruction): Placement | null {
   }
 }
 
+/** Retail discs fill unused room numbers with a 4-byte file of zeros. */
+export function isEmptyRoomSlot(bytes: Uint8Array): boolean {
+  return bytes.length <= 4 && bytes.every((b) => b === 0);
+}
+
 export function parseRdt1(bytes: Uint8Array): Rdt1 {
+  if (isEmptyRoomSlot(bytes)) throw new Error('empty room slot: the disc holds no room here');
   if (bytes.length < CAMERAS_AT) throw new Error('RDT too small for an RE1 room header');
   const dv = view(bytes);
   const header: RdtHeader = {

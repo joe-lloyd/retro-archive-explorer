@@ -30,6 +30,29 @@ function cleanName(raw: string): string {
 }
 
 /**
+ * PS1 boot programs are named after the product code (`SLUS_001.70`), so their
+ * extension says nothing about the format. SYSTEM.CNF's `BOOT = cdrom:\X;1`
+ * line names the program; tag that node `exe` so it gets the EXE tooling.
+ */
+function markBootExecutable(
+  root: VirtualNode,
+  descriptors: Map<string, NodeDescriptor>,
+  reader: ImageReader,
+): void {
+  const cnf = root.children?.find((c) => c.type === 'file' && c.name.toUpperCase() === 'SYSTEM.CNF');
+  const desc = cnf && descriptors.get(cnf.id);
+  if (!desc || desc.size > SECTOR) return;
+  const text = reader.readLogical(desc.lba, desc.size).toString('latin1');
+  const boot = /^\s*BOOT\s*=\s*cdrom\d*:[\\/]*([^;\s]+)/im.exec(text);
+  if (!boot) return;
+  let node: VirtualNode | undefined = root;
+  for (const part of boot[1].split(/[\\/]/).filter(Boolean)) {
+    node = node?.children?.find((c) => c.name.toUpperCase() === part.toUpperCase());
+  }
+  if (node?.type === 'file') node.extension = 'exe';
+}
+
+/**
  * Mount an ISO-9660 (or raw MODE2/2352 `.bin`) image and build the directory
  * tree. Only directory sectors are read here; file payloads stay on disk until
  * a node is explicitly requested.
@@ -109,6 +132,7 @@ export function mountImage(filePath: string): MountResult {
     };
 
     readDirectory(root, rootLba, rootSize, 0);
+    markBootExecutable(root, descriptors, reader);
     return { root, descriptors };
   } finally {
     reader.close();
