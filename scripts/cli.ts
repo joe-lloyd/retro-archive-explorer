@@ -19,7 +19,7 @@ import { parseModel } from '../electron/parsers/tmdParser';
 import { decodeAdpcm, decodeVag, parseAudio, pcmToWav, vabSamples } from '../electron/parsers/audio/psxAudio';
 import { interpretRe1 } from '../electron/parsers/re1/registry';
 import { isEmptyRoomSlot, parseRdt1, type Rdt1 } from '../electron/parsers/re1/rdt1';
-import { formatScd1 } from '../electron/parsers/re1/scd1';
+import { enemyName, formatScd1, type ScdArg } from '../electron/parsers/re1/scd1';
 import { encodePng } from './png';
 
 const USAGE = `usage: pnpm rae <command> ...
@@ -29,7 +29,8 @@ const USAGE = `usage: pnpm rae <command> ...
   extract <image> <outdir>
   room    <image> <path> | <file.rdt>
   script  <image> <path> | <file.rdt>
-  rooms   <image>`;
+  rooms   <image>
+  swap-enemy <in.rdt> <out.rdt> <from-type> <to-type> [kill-id]`;
 
 interface DiscFile {
   node: VirtualNode;
@@ -299,6 +300,41 @@ function roomsIndex(image: string): void {
   }
 }
 
+/**
+ * Copy a room file with every enemy() of one type changed to another. The
+ * script decoder finds the instructions, so only their type byte (the first
+ * operand, right after the opcode) changes. A kill id narrows it to one enemy.
+ */
+function argValue(arg: ScdArg | undefined): number | undefined {
+  return arg && arg.kind !== 'label' ? arg.value : undefined;
+}
+
+function swapEnemy(args: string[]): void {
+  const [src, dest, from, to, kill] = args;
+  const num = (v: string | undefined, what: string): number => {
+    const n = Number(v);
+    if (v === undefined || v.trim() === '' || !Number.isInteger(n) || n < 0 || n > 0xff) {
+      fail(`${what} must be a byte, got '${v ?? ''}'`);
+    }
+    return n;
+  };
+  if (!src || !dest) fail(USAGE);
+  if (path.resolve(src) === path.resolve(dest)) fail('out.rdt must differ from in.rdt; swap-enemy writes a copy');
+  const [fromType, toType] = [num(from, 'from-type'), num(to, 'to-type')];
+  const killId = kill === undefined ? undefined : num(kill, 'kill-id');
+  if (!existsSync(src)) fail(`no such file: ${src}`);
+  const bytes = readFileSync(src);
+  const rdt = parseRdt1(new Uint8Array(bytes));
+  const hits = [...rdt.init, ...rdt.main]
+    .flatMap((p) => p.instructions)
+    .filter((ins) => ins.name === 'enemy')
+    .filter((ins) => argValue(ins.args[0]) === fromType && (killId === undefined || argValue(ins.args[2]) === killId));
+  if (hits.length === 0) fail(`no enemy of type ${fromType} in ${src}`);
+  for (const ins of hits) bytes[ins.offset + 1] = toType;
+  writeFileSync(dest, bytes);
+  for (const ins of hits) console.log(`0x${ins.offset.toString(16)}: ${enemyName(fromType)} -> ${enemyName(toType)}`);
+}
+
 function main(): void {
   const [mode, ...args] = process.argv.slice(2);
   switch (mode) {
@@ -367,6 +403,9 @@ function main(): void {
       roomsIndex(image);
       return;
     }
+    case 'swap-enemy':
+      swapEnemy(args);
+      return;
     default:
       fail(USAGE);
   }
