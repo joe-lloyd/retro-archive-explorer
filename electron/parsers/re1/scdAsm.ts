@@ -5,7 +5,18 @@
 // that, such as `@ 0x11e`, is ignored). Block lengths are recomputed from the
 // content, so lines can be added or removed. Comments and the `/* Beretta */`
 // notes after operands are dropped.
-import { encodeScd1, opcodeByName, parseConstant, type ScdArg, type ScdInstruction } from './scd1';
+//
+// The engine runs each procedure until an `end` instruction (`return;`), so a
+// procedure without one would run on into the size word of the next. Every
+// procedure except the last of its section must therefore end with `return;`
+// and the assembler refuses it otherwise; it does not add one. The last
+// procedure may omit it because the section's closing zero word is an `end`.
+// Operands are checked against what the engine accepts: enemy and item types
+// must be in its tables, `set` modes are 0 (set), 1 (clear) or 2 (toggle), and
+// `if` blocks nest at most 16 deep, the size of its branch stack.
+import {
+  encodeScd1, ENEMY_TYPE_COUNT, MAX_ITEM_ID, opcodeByName, parseConstant, type ScdArg, type ScdInstruction,
+} from './scd1';
 
 export type ScriptKind = 'init' | 'main';
 
@@ -24,6 +35,20 @@ interface Block {
   kind: 'if' | 'else';
   label: LabelArg;
   line: number;
+}
+
+/** g_ScdBranchStack in the engine holds one resume address per open `if`. */
+const MAX_NESTING = 16;
+/** `set` operand 3: 0 sets the bit, 1 clears it, 2 toggles it (cmd_bit_op). */
+const SET_MODES = 3;
+/** Lock values the item operand also takes: UNLOCK and LOCKED. */
+const LOCK_VALUES = [254, 255];
+
+interface Procedure {
+  bytes: Uint8Array;
+  /** Line of its last statement. */
+  lastLine: number;
+  endsWithReturn: boolean;
 }
 
 const HEADER = /^\/\/\s*(init|main)\s+procedure\b/;
@@ -49,13 +74,17 @@ export function assembleScd1(text: string): AssembledScripts {
     if (!current) fail(no, 'code before the first "// init procedure" or "// main procedure" header');
     current.push({ no, text: code });
   });
-  return {
-    init: procedures.init.map(assembleProcedure),
-    main: procedures.main.map(assembleProcedure),
-  };
+  const assemble = (kind: ScriptKind): Uint8Array[] =>
+    procedures[kind].map(assembleProcedure).map((p, i, all) => {
+      if (i < all.length - 1 && !p.endsWithReturn) {
+        fail(p.lastLine, `${kind} procedure ${i} must end with "return;"; only the last ${kind} procedure may leave it out`);
+      }
+      return p.bytes;
+    });
+  return { init: assemble('init'), main: assemble('main') };
 }
 
-function assembleProcedure(lines: SourceLine[]): Uint8Array {
+function assembleProcedure(lines: SourceLine[]): Procedure {
   const drafts: ScdInstruction[] = [];
   const blocks: Block[] = [];
   let offset = 0;
@@ -73,6 +102,8 @@ function assembleProcedure(lines: SourceLine[]): Uint8Array {
     drafts.push(draft);
   };
   const openBlock = (kind: Block['kind'], line: number) => {
+    // An else replaces its if on the engine's branch stack; only an if grows it.
+    if (kind === 'if' && blocks.length >= MAX_NESTING) fail(line, `if blocks nest more than ${MAX_NESTING} deep`);
     const label: LabelArg = { kind: 'label', target: offset };
     blocks.push({ kind, label, line });
     emit(kind, [label], line);
@@ -100,6 +131,21 @@ function assembleProcedure(lines: SourceLine[]): Uint8Array {
       const value = parseConstant(info.signature?.[i] ?? 'u', token);
       if (value === undefined) fail(line, `${name} operand ${i + 1}: unknown value ${token}`);
       return { kind: 'num', value };
+    });
+    [...(info.signature ?? '')].forEach((letter, i) => {
+      const arg = args[i];
+      const value = arg?.kind === 'num' ? arg.value : undefined;
+      if (value === undefined) return;
+      const what = `${name} operand ${i + 1}`;
+      if (letter === 'e' && value >= ENEMY_TYPE_COUNT) {
+        fail(line, `${what} is enemy type ${value}, the engine has types 0-${ENEMY_TYPE_COUNT - 1}`);
+      }
+      if (letter === 't' && value > MAX_ITEM_ID && !LOCK_VALUES.includes(value)) {
+        fail(line, `${what} is item ${value}, the engine has items 0-${MAX_ITEM_ID}`);
+      }
+      if (name === 'set' && i === 2 && value >= SET_MODES) {
+        fail(line, `set mode is ${value}: 0 sets the flag, 1 clears it, 2 toggles it`);
+      }
     });
     emit(name, args, line);
   };
@@ -132,5 +178,10 @@ function assembleProcedure(lines: SourceLine[]): Uint8Array {
   }
   const open = blocks.at(-1);
   if (open) fail(open.line, `${open.kind} block is never closed`);
-  return encodeScd1(drafts);
+  const last = drafts.at(-1);
+  return {
+    bytes: encodeScd1(drafts),
+    lastLine: lines.at(-1)?.no ?? 0,
+    endsWithReturn: last?.name === 'end',
+  };
 }

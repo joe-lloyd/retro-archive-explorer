@@ -106,6 +106,21 @@ export const ENEMY_NAMES: readonly string[] = [
   'Jill (Black Shirt)', 'Chris 2 (Jacket)', 'Jill (Red Shirt)',
 ];
 
+/**
+ * Enemy types the engine can load. LoadEntityEMD reads g_emdPathTable at
+ * (type + 4), and that table holds 53 entries per player, so types 0-48 name a
+ * model. ENEMY_NAMES lists a few more (Jill, Chris variants) that the engine
+ * would read from the other player's half of the table.
+ */
+export const ENEMY_TYPE_COUNT = 53 - 4;
+
+/**
+ * Highest item id the engine has a name for: g_ItemNamePointers holds 128
+ * entries and is indexed by item id - 1. Retail rooms place items up to 110
+ * (the files and documents), well past the 76 ids ITEM_NAMES labels.
+ */
+export const MAX_ITEM_ID = 128;
+
 export const ITEM_NAMES: readonly string[] = [
   'Nothing', 'Combat Knife', 'Beretta', 'Shotgun', 'DumDum Colt', 'Colt Python',
   'FlameThrower', 'Bazooka Acid', 'Bazooka Explosive', 'Bazooka Flame', 'Rocket Launcher',
