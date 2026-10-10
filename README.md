@@ -62,6 +62,7 @@ pnpm rae rooms   re1.bin                  # one line per room: cameras, enemies,
 pnpm rae room    re1.bin ROOM1000.RDT     # cameras, placements and sections of one room
 pnpm rae script  re1.bin ROOM1000.RDT     # decompiled init and main room scripts
 pnpm rae dump    re1.bin ROOM1000.RDT     # diagnostics/<name>.json plus the raw bytes
+pnpm rae swap-enemy ROOM1040.RDT out.RDT 0x11 0 28  # copy a room with one enemy type swapped
 ```
 
 `room` and `script` also take a single extracted `.RDT` path. `extract` writes TIM as PNG, VAG as WAV, and each VAB sample as its own WAV. Each room gets a `<name>.RDT.d/` folder with its sections, `script.c`, `room.txt` and `room.json`. STR and XA files are copied as 2048-byte user data, so their Form 2 sectors are not usable yet.
