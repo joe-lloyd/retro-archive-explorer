@@ -43,10 +43,10 @@ function markBootExecutable(
   const desc = cnf && descriptors.get(cnf.id);
   if (!desc || desc.size > SECTOR) return;
   const text = reader.readLogical(desc.lba, desc.size).toString('latin1');
-  const boot = /^\s*BOOT\s*=\s*cdrom\d?:\\*([^;\s]+)/im.exec(text);
+  const boot = /^\s*BOOT\s*=\s*cdrom\d*:[\\/]*([^;\s]+)/im.exec(text);
   if (!boot) return;
   let node: VirtualNode | undefined = root;
-  for (const part of boot[1].split('\\').filter(Boolean)) {
+  for (const part of boot[1].split(/[\\/]/).filter(Boolean)) {
     node = node?.children?.find((c) => c.name.toUpperCase() === part.toUpperCase());
   }
   if (node?.type === 'file') node.extension = 'exe';
