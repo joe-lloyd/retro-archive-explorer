@@ -41,10 +41,13 @@ const OP_ENDIF = 0x03;
 /** Opcodes that test a condition and so belong inside an `if (...)`. */
 const CONDITIONS = new Set([0x04, 0x06, 0x07, 0x10, 0x11, 0x1a]);
 
+// Types 0x00 and 0x11 follow the decomp's EMD table (em1000 white coat, em1011
+// green coat) and were confirmed in game by swapping one for the other; the
+// biohazard-utils names (Groundskeeper, Researcher) had them backwards.
 export const ENEMY_NAMES: readonly string[] = [
-  'Zombie (Groundskeeper)', 'Zombie (Naked)', 'Cerberus', 'Web Spinner', 'Black Tiger',
+  'Zombie (White Coat)', 'Zombie (Naked)', 'Cerberus', 'Web Spinner', 'Black Tiger',
   'Crow', 'Hunter', 'Wasp', 'Plant 42', 'Chimera', 'Adder', 'Neptune', 'Tyrant 1',
-  'Yawn 1', 'Plant42 (roots)', 'Fountain Plant', 'Tyrant 2', 'Zombie (Researcher)',
+  'Yawn 1', 'Plant42 (roots)', 'Fountain Plant', 'Tyrant 2', 'Zombie (Green Coat)',
   'Yawn 2', 'Cobweb', 'Computer Hands (left)', 'Computer Hands (right)',
   '', '', '', '', '', '', '', '', '', '',
   'Chris (Stars)', 'Jill (Stars)', 'Barry (Stars)', 'Rebecca (Stars)', 'Wesker (Stars)',

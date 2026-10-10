@@ -58,12 +58,12 @@ const expectRoom = [
   'cameras',
   '  0: from (1000, -2000, 3000) to (0, 0, 0)',
   'camera switch zones: 1',
-  '  enemy #3  Zombie (Groundskeeper) [0] at (100, 0, -200) facing 1024',
+  '  enemy #3  Zombie (White Coat) [0] at (100, 0, -200) facing 1024',
   '  item  #1  Beretta x15 at (300, 400)',
   '  door  #2  -> ROOM_203 at (10, 20), arrive (1, 2, 3), lock 0',
 ];
 const expectScript = `// init procedure 0 @ 0x${INIT_AT.toString(16)}
-enemy(0 /* Zombie (Groundskeeper) */, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 100, 0, -200, 3, 0, 0, 0);
+enemy(0 /* Zombie (White Coat) */, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 100, 0, -200, 3, 0, 0, 0);
 item_aot_set(1, 300, 400, 500, 500, 2 /* Beretta */, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 return;
 
