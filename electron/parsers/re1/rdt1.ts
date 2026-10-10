@@ -7,7 +7,7 @@
 //   0x94  nCut camera records, 44 bytes each
 //
 // Section lengths are not stored. A section runs to the next known offset.
-import { enemyName, itemName, readScd1, roomName, type ScdInstruction } from './scd1';
+import { enemyName, formatScd1, itemName, readScd1, roomName, type ScdInstruction } from './scd1';
 
 const OFFSETS_AT = 0x48;
 const CAMERAS_AT = 0x94;
@@ -289,4 +289,71 @@ export function parseRdt1(bytes: Uint8Array): Rdt1 {
     events: readEvents(bytes, section('events.scd')),
     placements,
   };
+}
+
+/** Every init and main procedure as pseudo-C, each under a `// init procedure N @ 0x...` header. */
+export function formatScripts(rdt: Rdt1): string {
+  const block = (kind: string, procs: Procedure[]) =>
+    procs.map((p, i) => `// ${kind} procedure ${i} @ 0x${p.offset.toString(16)}\n${formatScd1(p.instructions)}`);
+  return [...block('init', rdt.init), ...block('main', rdt.main)].join('\n\n') + '\n';
+}
+
+/** Procedure bodies (opcodes only, no size prefix) to write in place of a room's scripts. */
+export interface ScriptReplacements {
+  init?: readonly Uint8Array[];
+  main?: readonly Uint8Array[];
+}
+
+const SCRIPT_SLOTS = { init: SECTION_NAMES.indexOf('init.scd'), main: SECTION_NAMES.indexOf('main.scd') };
+const SCRIPT_ALIGN = 4;
+const VB_AT = OFFSETS_AT + SECTION_NAMES.indexOf('snd.vb') * 4;
+const OMODEL_RECORD_SIZE = 0xa4;
+
+const align = (n: number) => Math.ceil(n / SCRIPT_ALIGN) * SCRIPT_ALIGN;
+
+/** `[u16 size][body]...[u16 0]`, padded so the next section stays aligned. */
+function encodeProcedures(bodies: readonly Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(align(bodies.reduce((n, b) => n + b.length + 2, 2)));
+  const dv = view(out);
+  let at = 0;
+  for (const body of bodies) {
+    if (body.length + 2 > 0xffff) throw new Error(`procedure is ${body.length} bytes, the limit is 65533`);
+    dv.setUint16(at, body.length + 2, true);
+    out.set(body, at + 2);
+    at += body.length + 2;
+  }
+  return out;
+}
+
+/**
+ * Copy a room with new init and/or main scripts. The new sections are appended
+ * at the end of the file, each aligned to 4 bytes, and the room's offset table
+ * is pointed at them. Nothing else moves: the old scripts stay where they were
+ * as unused bytes. Only the offset table points at the script sections; the
+ * event table is relative to its own start and the scripts hold no file offsets.
+ */
+export function replaceRdtSections(original: Uint8Array, replacements: ScriptReplacements): Uint8Array {
+  if (original.length < CAMERAS_AT) throw new Error('RDT too small for an RE1 room header');
+  // The engine reuses the snd.vb region as scratch memory (it carves a record
+  // per object and item model out of its start), so the file must extend past it.
+  const vb = view(original).getUint32(VB_AT, true);
+  const scratchEnd = vb + (original[2] + original[3]) * OMODEL_RECORD_SIZE;
+  if (vb > 0 && original.length < scratchEnd) {
+    throw new Error(`room ends at ${original.length}, inside the engine's scratch area (snd.vb at ${vb}, ${scratchEnd} needed)`);
+  }
+
+  const appended = (['init', 'main'] as const).flatMap((kind) => {
+    const bodies = replacements[kind];
+    return bodies ? [{ slot: SCRIPT_SLOTS[kind], bytes: encodeProcedures(bodies) }] : [];
+  });
+  const out = new Uint8Array(appended.reduce((end, a) => end + a.bytes.length, align(original.length)));
+  out.set(original);
+  const dv = view(out);
+  let at = align(original.length);
+  for (const { slot, bytes } of appended) {
+    out.set(bytes, at);
+    dv.setUint32(OFFSETS_AT + slot * 4, at, true);
+    at += bytes.length;
+  }
+  return out;
 }
