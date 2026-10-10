@@ -9,17 +9,24 @@
 //   room    <image> <path> | <file.rdt>   room summary: cameras, enemies, items, doors
 //   script  <image> <path> | <file.rdt>   decompiled init and main room scripts
 //   rooms   <image>                  one line per room across the whole disc
+//   asm     <script.c> <in.rdt> <out.rdt>   assemble script text into a copy of a room
+//   msg     <image> <path> | <file.rdt>   room messages, one per line as `index: text`
+//   msg-set <messages.txt> <in.rdt> <out.rdt> [--force]   replace a room's messages from that format
+//   flags   <image | dir>            which rooms check and set each flag, and which are unused
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { VirtualNode } from '../shared/types';
-import { ImageReader } from '../electron/parsers/imageReader';
-import { mountImage } from '../electron/parsers/isoParser';
+import { fail, findFile, openDisc, readFile, roomFiles } from './disc';
 import { parseTim } from '../electron/parsers/timParser';
 import { parseModel } from '../electron/parsers/tmdParser';
 import { decodeAdpcm, decodeVag, parseAudio, pcmToWav, vabSamples } from '../electron/parsers/audio/psxAudio';
 import { interpretRe1 } from '../electron/parsers/re1/registry';
-import { isEmptyRoomSlot, parseRdt1, type Rdt1 } from '../electron/parsers/re1/rdt1';
-import { enemyName, formatScd1, type ScdArg } from '../electron/parsers/re1/scd1';
+import {
+  formatScripts, isEmptyRoomSlot, parseRdt1, readRdtMessages, replaceRdtMessages, replaceRdtSections, type Rdt1,
+} from '../electron/parsers/re1/rdt1';
+import { formatMessages, parseMessages } from '../electron/parsers/re1/msg1';
+import { assembleScd1 } from '../electron/parsers/re1/scdAsm';
+import { encodeScd1, enemyName, FLAG_GROUPS, type ScdArg } from '../electron/parsers/re1/scd1';
 import { encodePng } from './png';
 
 const USAGE = `usage: pnpm rae <command> ...
@@ -30,53 +37,11 @@ const USAGE = `usage: pnpm rae <command> ...
   room    <image> <path> | <file.rdt>
   script  <image> <path> | <file.rdt>
   rooms   <image>
-  swap-enemy <in.rdt> <out.rdt> <from-type> <to-type> [kill-id]`;
-
-interface DiscFile {
-  node: VirtualNode;
-  lba: number;
-  size: number;
-}
-
-/** A mounted disc: its files plus one open reader for byte reads. */
-interface Disc {
-  files: DiscFile[];
-  reader: ImageReader;
-}
-
-function openDisc(image: string): Disc {
-  const { root, descriptors } = mountImage(image);
-  const files: DiscFile[] = [];
-  const walk = (node: VirtualNode) => {
-    const desc = descriptors.get(node.id);
-    if (node.type === 'file' && desc) files.push({ node, lba: desc.lba, size: desc.size });
-    node.children?.forEach(walk);
-  };
-  walk(root);
-  return { files, reader: new ImageReader(image) };
-}
-
-function readFile(disc: Disc, file: DiscFile): Buffer {
-  const bytes = disc.reader.readLogical(file.lba, file.size);
-  if (bytes.length !== file.size) {
-    throw new Error(`${file.node.path}: image ends after ${bytes.length} of ${file.size} bytes`);
-  }
-  return bytes;
-}
-
-function findFile(disc: Disc, query: string): DiscFile {
-  const q = query.toLowerCase();
-  const hit =
-    disc.files.find((f) => f.node.path.toLowerCase() === q) ??
-    disc.files.find((f) => f.node.path.toLowerCase().endsWith(q));
-  if (!hit) fail(`file not found on disc: ${query}`);
-  return hit;
-}
-
-/** Stop with a message. The top level prints it and sets the exit code. */
-function fail(message: string): never {
-  throw new Error(message);
-}
+  swap-enemy <in.rdt> <out.rdt> <from-type> <to-type> [kill-id]
+  asm     <script.c> <in.rdt> <out.rdt>
+  msg     <image> <path> | <file.rdt>
+  msg-set <messages.txt> <in.rdt> <out.rdt> [--force]
+  flags   <image | dir>`;
 
 /** `<image> <path>` reads from the disc; a lone existing file path reads it directly. */
 function loadTarget(args: string[]): { name: string; bytes: Buffer } {
@@ -191,12 +156,6 @@ function roomReport(name: string, rdt: Rdt1): string {
   return out.join('\n');
 }
 
-function scriptReport(rdt: Rdt1): string {
-  const block = (kind: string, procs: Rdt1['init']) =>
-    procs.map((p, i) => `// ${kind} procedure ${i} @ 0x${p.offset.toString(16)}\n${formatScd1(p.instructions)}`);
-  return [...block('init', rdt.init), ...block('main', rdt.main)].join('\n\n') + '\n';
-}
-
 /**
  * Write a converted copy next to the raw file when the format is understood.
  * Returns errors from sections that failed inside a container.
@@ -223,7 +182,7 @@ function convert(ext: string | undefined, bytes: Buffer, dest: string): string[]
       writeFileSync(file, part);
       if (s.name.endsWith('.tim')) errors.push(...tryConvert('tim', part, file).map((e) => `${s.name}: ${e}`));
     }
-    writeFileSync(path.join(dir, 'script.c'), scriptReport(rdt));
+    writeFileSync(path.join(dir, 'script.c'), formatScripts(rdt));
     writeFileSync(path.join(dir, 'room.txt'), roomReport(path.basename(dest), rdt) + '\n');
     writeFileSync(path.join(dir, 'room.json'), JSON.stringify(rdt, (k, v) => (k === 'bytes' ? undefined : v), 2));
     return errors;
@@ -335,6 +294,158 @@ function swapEnemy(args: string[]): void {
   for (const ins of hits) console.log(`0x${ins.offset.toString(16)}: ${enemyName(fromType)} -> ${enemyName(toType)}`);
 }
 
+/**
+ * Assemble script text (the format `script` prints) and write a copy of a room
+ * whose init and main procedures are the assembled ones. A script section with
+ * no procedures in the text keeps the room's own.
+ */
+function asm(args: string[]): void {
+  const [scriptPath, src, dest] = args;
+  if (!scriptPath || !src || !dest) fail(USAGE);
+  for (const file of [scriptPath, src]) if (!existsSync(file)) fail(`no such file: ${file}`);
+  for (const input of [scriptPath, src]) {
+    if (path.resolve(input) === path.resolve(dest)) fail(`out.rdt must differ from ${input}; asm writes a copy`);
+  }
+  const scripts = assembleScd1(readFileSync(scriptPath, 'utf8'));
+  if (scripts.init.length + scripts.main.length === 0) {
+    fail(`${scriptPath} has no "// init procedure" or "// main procedure" blocks`);
+  }
+  const original = new Uint8Array(readFileSync(src));
+  const out = replaceRdtSections(original, {
+    init: scripts.init.length ? scripts.init : undefined,
+    main: scripts.main.length ? scripts.main : undefined,
+  });
+  // Read the new room back to prove the writer produced what was assembled.
+  const room = parseRdt1(out);
+  for (const kind of ['init', 'main'] as const) {
+    const written = room[kind].map((p) => encodeScd1(p.instructions));
+    const want = scripts[kind];
+    if (want.length && (written.length !== want.length || written.some((w, i) => !Buffer.from(w).equals(want[i])))) {
+      fail(`${kind} procedures read back from the new room differ from the assembled ones`);
+    }
+  }
+  writeFileSync(dest, out);
+  // replaceRdtSections leaves a section alone when its bytes are already the room's.
+  const was = parseRdt1(original);
+  const describe = (kind: 'init' | 'main') =>
+    scripts[kind].length && room[kind][0].offset !== was[kind][0]?.offset
+      ? `${kind} ${scripts[kind].length} procedure(s) written at 0x${room[kind][0].offset.toString(16)}`
+      : `${kind} unchanged`;
+  console.log(`wrote ${dest}: ${describe('init')}, ${describe('main')}`);
+}
+
+/**
+ * Replace a room's messages with the `index: text` lines `msg` prints. Adding
+ * messages at the end is always fine. Removing any is refused without --force:
+ * a script may still show a message by number, and event scripts are not
+ * decoded, so there is no way to prove one does not.
+ */
+function msgSet(args: string[]): void {
+  const force = args.includes('--force');
+  const [textPath, src, dest] = args.filter((a) => a !== '--force');
+  if (!textPath || !src || !dest) fail(USAGE);
+  for (const file of [textPath, src]) if (!existsSync(file)) fail(`no such file: ${file}`);
+  if (path.resolve(src) === path.resolve(dest)) fail('out.rdt must differ from in.rdt; msg-set writes a copy');
+  const texts = parseMessages(readFileSync(textPath, 'utf8'));
+  const original = new Uint8Array(readFileSync(src));
+  const had = readRdtMessages(original).length;
+  // Encode first so a bad character is reported before any policy question.
+  const out = replaceRdtMessages(original, texts);
+  if (texts.length < had && !force) {
+    const room = parseRdt1(original);
+    const shown = [...room.init, ...room.main]
+      .flatMap((p) => p.instructions)
+      .filter((ins) => ins.name === 'message' && (ins.bytes[1] & 0x40) === 0)
+      .map((ins) => ins.bytes[1] & 0x3f);
+    const lost = [...new Set(shown.filter((id) => id >= texts.length))].sort((a, b) => a - b);
+    fail(
+      `${textPath} has ${texts.length} messages, ${src} has ${had}. ` +
+        (lost.length
+          ? `The room's scripts show message ${lost.join(', ')}. `
+          : 'Event scripts are not decoded, so one may show a removed message. ') +
+        'Pass --force to remove them.',
+    );
+  }
+  // Read the new room back to prove the writer stored what was parsed.
+  const written = readRdtMessages(out).map((m) => m.text);
+  if (written.length !== texts.length || written.some((t, i) => t !== texts[i])) {
+    fail('messages read back from the new room differ from the ones given');
+  }
+  writeFileSync(dest, out);
+  console.log(`wrote ${dest}: ${texts.length} messages (${had} before)`);
+}
+
+/** `set` operand 3: what the instruction does to the bit (cmd_bit_op). */
+const FLAG_WRITES = ['setBy', 'clearedBy', 'toggledBy'] as const;
+
+interface FlagUse {
+  checkedBy: Set<string>;
+  setBy: Set<string>;
+  clearedBy: Set<string>;
+  toggledBy: Set<string>;
+}
+
+/** [0, 1, 2, 5] -> "0-2, 5" */
+function ranges(values: number[]): string {
+  const parts: string[] = [];
+  for (let i = 0; i < values.length; i++) {
+    let j = i;
+    while (values[j + 1] === values[j] + 1) j++;
+    parts.push(j > i ? `${values[i]}-${values[j]}` : String(values[i]));
+    i = j;
+  }
+  return parts.join(', ');
+}
+
+/**
+ * For every flag group and index: the rooms whose init or main script tests it
+ * (ck) and the rooms that set, clear or toggle it (set mode 0, 1, 2). Indexes no room touches are listed
+ * per group. Event scripts are not decoded, so they may still use those.
+ */
+function flagsReport(target: string): string {
+  const uses = new Map<number, Map<number, FlagUse>>();
+  for (const room of roomFiles(target)) {
+    if (room.bytes.length < 0x94) continue;
+    const name = path.basename(room.name.replace(/\\/g, '/'), path.extname(room.name));
+    const rdt = parseRdt1(room.bytes);
+    for (const ins of [...rdt.init, ...rdt.main].flatMap((p) => p.instructions)) {
+      if (ins.name !== 'ck' && ins.name !== 'set') continue;
+      const group = argValue(ins.args[0]);
+      const index = argValue(ins.args[1]);
+      if (group === undefined || index === undefined) continue;
+      const byIndex = uses.get(group) ?? new Map<number, FlagUse>();
+      uses.set(group, byIndex);
+      const use = byIndex.get(index) ?? { checkedBy: new Set(), setBy: new Set(), clearedBy: new Set(), toggledBy: new Set() };
+      byIndex.set(index, use);
+      if (ins.name === 'ck') {
+        use.checkedBy.add(name);
+        continue;
+      }
+      const mode = argValue(ins.args[2]);
+      const writes = mode === undefined ? undefined : FLAG_WRITES[mode];
+      if (writes) use[writes].add(name);
+    }
+  }
+  const lines: string[] = [];
+  const groups = [...new Set([...FLAG_GROUPS.keys(), ...uses.keys()])].sort((a, b) => a - b);
+  for (const group of groups) {
+    const byIndex = uses.get(group) ?? new Map<number, FlagUse>();
+    lines.push(`${FLAG_GROUPS[group] ?? `FG_${group}`} (group ${group}): ${byIndex.size} of 256 indexes used`);
+    for (const index of [...byIndex.keys()].sort((a, b) => a - b)) {
+      const use = byIndex.get(index);
+      if (!use) continue;
+      lines.push(
+        `  ${String(index).padStart(3)}  checked by [${[...use.checkedBy].join(' ')}]  set by [${[...use.setBy].join(' ')}]` +
+          `  cleared by [${[...use.clearedBy].join(' ')}]  toggled by [${[...use.toggledBy].join(' ')}]`,
+      );
+    }
+    const unused = Array.from({ length: 256 }, (_, i) => i).filter((i) => !byIndex.has(i));
+    lines.push(`  never used: ${unused.length ? ranges(unused) : 'none'}`, '');
+  }
+  lines.push('Only init and main scripts are read. Event scripts are not decoded, so an unused index may still be used there.');
+  return lines.join('\n');
+}
+
 function main(): void {
   const [mode, ...args] = process.argv.slice(2);
   switch (mode) {
@@ -394,7 +505,7 @@ function main(): void {
     }
     case 'script': {
       const { bytes } = loadTarget(args);
-      process.stdout.write(scriptReport(parseRdt1(new Uint8Array(bytes))));
+      process.stdout.write(formatScripts(parseRdt1(new Uint8Array(bytes))));
       return;
     }
     case 'rooms': {
@@ -406,6 +517,23 @@ function main(): void {
     case 'swap-enemy':
       swapEnemy(args);
       return;
+    case 'asm':
+      asm(args);
+      return;
+    case 'msg': {
+      const { bytes } = loadTarget(args);
+      process.stdout.write(formatMessages(readRdtMessages(new Uint8Array(bytes)).map((m) => m.text)));
+      return;
+    }
+    case 'msg-set':
+      msgSet(args);
+      return;
+    case 'flags': {
+      const [target] = args;
+      if (!target) fail(USAGE);
+      console.log(flagsReport(target));
+      return;
+    }
     default:
       fail(USAGE);
   }
