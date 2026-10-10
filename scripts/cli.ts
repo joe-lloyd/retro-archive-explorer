@@ -313,10 +313,13 @@ function swapEnemy(args: string[]): void {
   const [src, dest, from, to, kill] = args;
   const num = (v: string | undefined, what: string): number => {
     const n = Number(v);
-    if (v === undefined || !Number.isInteger(n) || n < 0 || n > 0xff) fail(`${what} must be a byte, got ${v}`);
+    if (v === undefined || v.trim() === '' || !Number.isInteger(n) || n < 0 || n > 0xff) {
+      fail(`${what} must be a byte, got '${v ?? ''}'`);
+    }
     return n;
   };
   if (!src || !dest) fail(USAGE);
+  if (path.resolve(src) === path.resolve(dest)) fail('out.rdt must differ from in.rdt; swap-enemy writes a copy');
   const [fromType, toType] = [num(from, 'from-type'), num(to, 'to-type')];
   const killId = kill === undefined ? undefined : num(kill, 'kill-id');
   if (!existsSync(src)) fail(`no such file: ${src}`);
@@ -327,11 +330,9 @@ function swapEnemy(args: string[]): void {
     .filter((ins) => ins.name === 'enemy')
     .filter((ins) => argValue(ins.args[0]) === fromType && (killId === undefined || argValue(ins.args[2]) === killId));
   if (hits.length === 0) fail(`no enemy of type ${fromType} in ${src}`);
-  for (const ins of hits) {
-    bytes[ins.offset + 1] = toType;
-    console.log(`0x${ins.offset.toString(16)}: ${enemyName(fromType)} -> ${enemyName(toType)}`);
-  }
+  for (const ins of hits) bytes[ins.offset + 1] = toType;
   writeFileSync(dest, bytes);
+  for (const ins of hits) console.log(`0x${ins.offset.toString(16)}: ${enemyName(fromType)} -> ${enemyName(toType)}`);
 }
 
 function main(): void {
