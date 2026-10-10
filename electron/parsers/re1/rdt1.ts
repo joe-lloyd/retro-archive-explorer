@@ -338,14 +338,19 @@ function encodeProcedures(bodies: readonly Uint8Array[]): Uint8Array {
  */
 const ROOM_BUFFER_SIZE = 832728;
 /**
- * Headroom for EMD loading to keep. Shipped rooms prove their own headroom is
- * enough but not how much of it they use, and one EMD runs to 220 KB and a room
- * loads several. 471,728 bytes is the least headroom any of the 320 retail PC
- * rooms has, so it is known to be enough for some room and covers two of the
- * largest EMDs. A write may shrink a room's headroom only while at least this
- * much is left; a room that already has less may not shrink at all.
+ * Headroom for EMD loading. The room loads one model per enemy type its
+ * scripts place (NPCs included), and the largest EMD runs to 220 KB, so a
+ * written room must leave that much for every distinct type plus a margin for
+ * the object and item records. A room that already had less than that may not
+ * shrink at all: shipped rooms prove only their own headroom was enough.
  */
-const EMD_RESERVE = 471_728;
+const EMD_MAX = 220_000;
+const EMD_MARGIN = 32_768;
+
+function emdReserve(rdt: Uint8Array): number {
+  const types = new Set(parseRdt1(rdt).placements.flatMap((p) => (p.kind === 'enemy' ? [p.type] : [])));
+  return types.size * EMD_MAX + EMD_MARGIN;
+}
 
 const emdHeadroom = (bytes: Uint8Array, vb: number) =>
   ROOM_BUFFER_SIZE - (vb + (bytes[2] + bytes[3]) * OMODEL_RECORD_SIZE);
@@ -400,10 +405,11 @@ function appendSections(original: Uint8Array, wanted: readonly { slot: number; b
 
   const before = emdHeadroom(original, vb);
   const after = emdHeadroom(out, vbAt);
-  if (out.length > ROOM_BUFFER_SIZE || after < Math.min(before, EMD_RESERVE)) {
+  const reserve = emdReserve(out);
+  if (out.length > ROOM_BUFFER_SIZE || after < Math.min(before, reserve)) {
     throw new Error(
       `the new room is ${out.length} bytes and leaves ${after} bytes of the ${ROOM_BUFFER_SIZE}-byte room buffer for enemy models; ` +
-        `the original left ${before} and ${EMD_RESERVE} must stay free`,
+        `its enemy types need ${reserve} and the original left ${before}`,
     );
   }
   return out;
