@@ -13,6 +13,7 @@
     "icons": "node scripts/gen-icons.mjs",
     "rae": "node scripts/cli.mjs",
     "verify:rdt1": "node scripts/verify-rdt1.mjs",
+    "demo:disc": "node scripts/make-demo-disc.mjs",
     "dist": "electron-vite build && electron-builder",
     "release": "electron-vite build && electron-builder --publish always"
   },

@@ -47,6 +47,7 @@ pnpm build      # electron-vite build -> out/ (main, preload, renderer)
 pnpm dist       # build + package installers for the current OS (electron-builder)
 pnpm icons      # regenerate build/icon.png + build/icon.ico from build/icon.svg
 pnpm verify:rdt1  # check the RE1 room and script decoder against a synthetic room
+pnpm demo:disc out/demo.iso  # build a demo ISO with no game data (macOS, uses hdiutil)
 ```
 
 ## Command line
