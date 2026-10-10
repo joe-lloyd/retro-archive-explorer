@@ -7,6 +7,7 @@
 //   0x94  nCut camera records, 44 bytes each
 //
 // Section lengths are not stored. A section runs to the next known offset.
+import { encodeMessageSection, readMessageSection, type RawMessage } from './msg1';
 import { enemyName, formatScd1, itemName, readScd1, roomName, type ScdInstruction } from './scd1';
 
 const OFFSETS_AT = 0x48;
@@ -306,14 +307,15 @@ export interface ScriptReplacements {
 
 const SCRIPT_SLOTS = { init: SECTION_NAMES.indexOf('init.scd'), main: SECTION_NAMES.indexOf('main.scd') };
 const SCRIPT_ALIGN = 4;
+const MESSAGE_SLOT = SECTION_NAMES.indexOf('message.msg');
 const VB_AT = OFFSETS_AT + SECTION_NAMES.indexOf('snd.vb') * 4;
 const OMODEL_RECORD_SIZE = 0xa4;
 
 const align = (n: number) => Math.ceil(n / SCRIPT_ALIGN) * SCRIPT_ALIGN;
 
-/** `[u16 size][body]...[u16 0]`, padded so the next section stays aligned. */
+/** `[u16 size][body]...[u16 0]` */
 function encodeProcedures(bodies: readonly Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(align(bodies.reduce((n, b) => n + b.length + 2, 2)));
+  const out = new Uint8Array(bodies.reduce((n, b) => n + b.length + 2, 2));
   const dv = view(out);
   let at = 0;
   for (const body of bodies) {
@@ -326,34 +328,118 @@ function encodeProcedures(bodies: readonly Uint8Array[]): Uint8Array {
 }
 
 /**
- * Copy a room with new init and/or main scripts. The new sections are appended
- * at the end of the file, each aligned to 4 bytes, and the room's offset table
- * is pointed at them. Nothing else moves: the old scripts stay where they were
- * as unused bytes. Only the offset table points at the script sections; the
- * event table is relative to its own start and the scripts hold no file offsets.
+ * Where the engine's model scratch memory sits. room_set (RoomInit.cpp) starts
+ * g_loadDataDestPointer at the room's snd.vb address, carves one 0xA4-byte
+ * record per object and item model out of it, then loads each enemy's EMD
+ * upward from there. The bytes it overwrites are the vb region and everything
+ * after it in the file, which are dead once sound and textures are uploaded.
+ * Anything a writer put after snd.vb would be overwritten as well, so new
+ * sections go before it. The room buffer, g_DataBuffer, is a fixed size.
+ */
+const ROOM_BUFFER_SIZE = 832728;
+/**
+ * Headroom for EMD loading to keep. Shipped rooms prove their own headroom is
+ * enough but not how much of it they use, and one EMD runs to 220 KB and a room
+ * loads several. 471,728 bytes is the least headroom any of the 320 retail PC
+ * rooms has, so it is known to be enough for some room and covers two of the
+ * largest EMDs. A write may shrink a room's headroom only while at least this
+ * much is left; a room that already has less may not shrink at all.
+ */
+const EMD_RESERVE = 471_728;
+
+const emdHeadroom = (bytes: Uint8Array, vb: number) =>
+  ROOM_BUFFER_SIZE - (vb + (bytes[2] + bytes[3]) * OMODEL_RECORD_SIZE);
+
+/**
+ * One layout for every writer: new sections first, then snd.vb last, with the
+ * offset-table slot of each pointed at its bytes, so the engine's scratch area
+ * starts past all new data. Each section starts on a 4-byte boundary. A section
+ * whose bytes already sit where its slot points is left alone, and when none
+ * changed the result is a plain copy.
+ *
+ * snd.vb is the only thing the offset table points at there: parseRdt1 ends it
+ * at the next offset anything declares, and for retail rooms its size plus the
+ * VAB header's matches the size the header states, so no other offset points
+ * inside. If snd.vb is already the file's last section (a room written before)
+ * the new sections go where it starts and it moves behind them, so repeated
+ * writes do not leave a dead copy each. Otherwise vb is copied to the end and
+ * the old copy stays as unused bytes. Everything else stays where it was.
+ */
+function appendSections(original: Uint8Array, wanted: readonly { slot: number; bytes: Uint8Array }[]): Uint8Array {
+  if (original.length < CAMERAS_AT) throw new Error('RDT too small for an RE1 room header');
+  const dv0 = view(original);
+  const appended = wanted.filter(({ slot, bytes }) => {
+    const at = dv0.getUint32(OFFSETS_AT + slot * 4, true);
+    return !(at + bytes.length <= original.length && bytes.every((b, i) => original[at + i] === b));
+  });
+  if (appended.length === 0) return original.slice();
+
+  const vb = dv0.getUint32(VB_AT, true);
+  const vbSection = parseRdt1(original).sections.find((s) => s.offset === vb);
+  if (!vbSection) throw new Error(`room has no snd.vb data at 0x${vb.toString(16)} to keep behind the new sections`);
+  const vbBytes = original.subarray(vb, vb + vbSection.size);
+  const vbIsLast = vb + vbSection.size === original.length;
+
+  const keep = vbIsLast ? vb : original.length;
+  let end = align(keep);
+  const placed = appended.map((a) => {
+    const at = end;
+    end = align(end + a.bytes.length);
+    return { ...a, at };
+  });
+  const vbAt = end;
+  const out = new Uint8Array(vbAt + vbBytes.length);
+  out.set(original.subarray(0, keep));
+  const dv = view(out);
+  for (const { slot, bytes, at } of placed) {
+    out.set(bytes, at);
+    dv.setUint32(OFFSETS_AT + slot * 4, at, true);
+  }
+  out.set(vbBytes, vbAt);
+  dv.setUint32(VB_AT, vbAt, true);
+
+  const before = emdHeadroom(original, vb);
+  const after = emdHeadroom(out, vbAt);
+  if (out.length > ROOM_BUFFER_SIZE || after < Math.min(before, EMD_RESERVE)) {
+    throw new Error(
+      `the new room is ${out.length} bytes and leaves ${after} bytes of the ${ROOM_BUFFER_SIZE}-byte room buffer for enemy models; ` +
+        `the original left ${before} and ${EMD_RESERVE} must stay free`,
+    );
+  }
+  return out;
+}
+
+/**
+ * Copy a room with new init and/or main scripts written behind the old data
+ * (see appendSections) and the offset table pointed at them. Only the offset table points at
+ * the script sections; the event table is relative to its own start and the
+ * scripts hold no file offsets.
  */
 export function replaceRdtSections(original: Uint8Array, replacements: ScriptReplacements): Uint8Array {
-  if (original.length < CAMERAS_AT) throw new Error('RDT too small for an RE1 room header');
-  // The engine reuses the snd.vb region as scratch memory (it carves a record
-  // per object and item model out of its start), so the file must extend past it.
-  const vb = view(original).getUint32(VB_AT, true);
-  const scratchEnd = vb + (original[2] + original[3]) * OMODEL_RECORD_SIZE;
-  if (vb > 0 && original.length < scratchEnd) {
-    throw new Error(`room ends at ${original.length}, inside the engine's scratch area (snd.vb at ${vb}, ${scratchEnd} needed)`);
-  }
-
   const appended = (['init', 'main'] as const).flatMap((kind) => {
     const bodies = replacements[kind];
     return bodies ? [{ slot: SCRIPT_SLOTS[kind], bytes: encodeProcedures(bodies) }] : [];
   });
-  const out = new Uint8Array(appended.reduce((end, a) => end + a.bytes.length, align(original.length)));
-  out.set(original);
-  const dv = view(out);
-  let at = align(original.length);
-  for (const { slot, bytes } of appended) {
-    out.set(bytes, at);
-    dv.setUint32(OFFSETS_AT + slot * 4, at, true);
-    at += bytes.length;
-  }
-  return out;
+  return appendSections(original, appended);
+}
+
+/** Every message of a room, as text and as stored bytes. */
+export function readRdtMessages(bytes: Uint8Array): RawMessage[] {
+  const section = parseRdt1(bytes).sections.find((s) => s.name === 'message.msg');
+  if (!section) throw new Error('room has no message section');
+  // Read to the end of the file, not the section: retail ROOM5140 ends its last
+  // message with an opened-and-never-closed skip span that runs into the next section.
+  return readMessageSection(bytes.subarray(section.offset));
+}
+
+/**
+ * Copy a room with its messages replaced by `messages` (editable text, see
+ * msg1.ts). The new section is written the way replaceRdtSections writes
+ * scripts (see appendSections) and the 0x74 pointer is moved to it, so the two
+ * compose in either order. Nothing points into the old message section
+ * except that pointer: LoadRoomRdt adds the file's base address to every entry
+ * of the 0x48 table, and message text is only reached through it.
+ */
+export function replaceRdtMessages(original: Uint8Array, messages: readonly string[]): Uint8Array {
+  return appendSections(original, [{ slot: MESSAGE_SLOT, bytes: encodeMessageSection(messages) }]);
 }
