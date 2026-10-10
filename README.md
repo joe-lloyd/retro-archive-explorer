@@ -48,6 +48,7 @@ pnpm dist       # build + package installers for the current OS (electron-builde
 pnpm icons      # regenerate build/icon.png + build/icon.ico from build/icon.svg
 pnpm verify:rdt1  # check the RE1 room and script decoder against a synthetic room
 pnpm demo:disc out/demo.iso  # build a demo ISO with no game data (macOS, uses hdiutil)
+node scripts/verify-scd-roundtrip.mjs <image | dir>...  # round-trip every room script through the assembler
 ```
 
 ## Command line
@@ -63,9 +64,13 @@ pnpm rae room    re1.bin ROOM1000.RDT     # cameras, placements and sections of 
 pnpm rae script  re1.bin ROOM1000.RDT     # decompiled init and main room scripts
 pnpm rae dump    re1.bin ROOM1000.RDT     # diagnostics/<name>.json plus the raw bytes
 pnpm rae swap-enemy ROOM1040.RDT out.RDT 0x11 0 28  # copy a room with one enemy type swapped
+pnpm rae asm     script.c in.RDT out.RDT  # assemble edited script text into a copy of a room
+pnpm rae flags   re1.bin                  # which rooms check and set each flag; unused indexes per group
 ```
 
 `room` and `script` also take a single extracted `.RDT` path. `extract` writes TIM as PNG, VAG as WAV, and each VAB sample as its own WAV. Each room gets a `<name>.RDT.d/` folder with its sections, `script.c`, `room.txt` and `room.json`. STR and XA files are copied as 2048-byte user data, so their Form 2 sectors are not usable yet.
+
+`asm` takes the text `script` prints. Edit it freely: block lengths are recomputed, and `/* ... */` notes are ignored. Each procedure needs its `// init procedure N` or `// main procedure N` header; a section with no procedures in the text keeps the room's own. The new scripts are appended to the end of the room file and the offset table is pointed at them, so every other byte stays where it was. `verify-scd-roundtrip.mjs` takes a disc image or a directory of `.RDT` files and proves each init and main procedure survives decode, text and assemble byte for byte. `flags` reads only init and main scripts; event scripts are not decoded, so an index it lists as unused may still be used there.
 
 The RE1 room layout and script opcodes are ported from [biohazard-utils](https://github.com/biorand/biohazard-utils) (MIT). Event scripts (cutscenes) are listed by offset but not decoded yet.
 
