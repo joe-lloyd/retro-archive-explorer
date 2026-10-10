@@ -9,7 +9,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const out = process.argv[2];
-if (!out) {
+if (!out?.toLowerCase().endsWith('.iso')) {
+  // hdiutil appends .iso to any other name, so the file would not land at <out>.
   console.error('usage: node scripts/make-demo-disc.mjs <out.iso>');
   process.exit(1);
 }
@@ -129,8 +130,11 @@ try {
   }
   mkdirSync(path.join(root, 'PSX/STAGE1'), { recursive: true });
   copyFileSync(room(scratch), path.join(root, 'PSX/STAGE1/ROOM1000.RDT'));
+  mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
   rmSync(out, { force: true });
-  execFileSync('hdiutil', ['makehybrid', '-iso', '-default-volume-name', 'RAE_DEMO', '-o', out, root], { stdio: 'ignore' });
+  execFileSync('hdiutil', ['makehybrid', '-iso', '-default-volume-name', 'RAE_DEMO', '-o', out, root], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+  });
   console.log(`wrote ${out}`);
 } finally {
   rmSync(scratch, { recursive: true, force: true });
