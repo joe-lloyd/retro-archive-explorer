@@ -6,6 +6,9 @@
 // content, so lines can be added or removed. Comments and the `/* Beretta */`
 // notes after operands are dropped.
 //
+// A header that is spelled wrong (`// MAIN procedure 1`, `// main procdure 1`)
+// is an error, and the numbers must run 0, 1, 2 within each section.
+//
 // The engine runs each procedure until an `end` instruction (`return;`, or
 // `end(n)` with any n, since cmd_block_end never reads its operand). An `end`
 // inside an if or else block only ends the procedure when that branch runs, so
@@ -53,7 +56,10 @@ interface Procedure {
   endsWithReturn: boolean;
 }
 
-const HEADER = /^\/\/\s*(init|main)\s+procedure\b/;
+/** A well-formed header. Anything after the number, such as `@ 0x11e`, is ignored. */
+const HEADER = /^\/\/\s*(init|main)\s+procedure\s+(0|[1-9]\d*)(?:\s.*)?$/;
+/** A comment that was meant as a header, so a misspelling is an error and not a silent comment. */
+const HEADER_LIKE = /^\/\/\s*(init|main)\s+proc/i;
 const NUMBER = /^(-?)(\d+|0x[0-9a-f]+)$/i;
 
 function fail(line: number, message: string): never {
@@ -65,11 +71,20 @@ export function assembleScd1(text: string): AssembledScripts {
   let current: SourceLine[] | undefined;
   text.split(/\r?\n/).forEach((raw, i) => {
     const no = i + 1;
-    const header = HEADER.exec(raw.trim());
+    const trimmed = raw.trim();
+    const header = HEADER.exec(trimmed);
     if (header) {
+      const kind = header[1] as ScriptKind;
+      const number = Number(header[2]);
+      const expected = procedures[kind].length;
+      if (number < expected) fail(no, `${kind} procedure ${number} appears twice`);
+      if (number > expected) fail(no, `${kind} procedure ${number} is out of order, expected ${kind} procedure ${expected}`);
       current = [];
-      procedures[header[1] as ScriptKind].push(current);
+      procedures[kind].push(current);
       return;
+    }
+    if (HEADER_LIKE.test(trimmed)) {
+      fail(no, `"${trimmed}" looks like a procedure header but is not "// init procedure N" or "// main procedure N" in lower case`);
     }
     const code = raw.replace(/\/\*.*?\*\//g, '').replace(/\/\/.*$/, '').trim();
     if (!code) return;
