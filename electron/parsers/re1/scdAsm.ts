@@ -6,10 +6,12 @@
 // content, so lines can be added or removed. Comments and the `/* Beretta */`
 // notes after operands are dropped.
 //
-// The engine runs each procedure until an `end` instruction (`return;`), so a
-// procedure without one would run on into the size word of the next. Every
-// procedure except the last of its section must therefore end with `return;`
-// and the assembler refuses it otherwise; it does not add one. The last
+// The engine runs each procedure until an `end` instruction (`return;`, or
+// `end(n)` with any n, since cmd_block_end never reads its operand). An `end`
+// inside an if or else block only ends the procedure when that branch runs, so
+// the procedure's last statement outside every block must be the `end`.
+// Every procedure except the last of its section must therefore end with
+// `return;` and the assembler refuses it otherwise; it does not add one. The last
 // procedure may omit it because the section's closing zero word is an `end`.
 // Operands are checked against what the engine accepts: enemy and item types
 // must be in its tables, `set` modes are 0 (set), 1 (clear) or 2 (toggle), and
@@ -150,7 +152,10 @@ function assembleProcedure(lines: SourceLine[]): Procedure {
     emit(name, args, line);
   };
 
+  /** True when the last statement was an `end` outside every block. */
+  let endsAtTopLevel = false;
   for (const { no, text } of lines) {
+    const before = drafts.length;
     const ifMatch = /^if\s*\((.*)\)\s*\{$/.exec(text);
     if (ifMatch) {
       openBlock('if', no);
@@ -175,13 +180,14 @@ function assembleProcedure(lines: SourceLine[]): Procedure {
     } else {
       fail(no, `cannot parse: ${text}`);
     }
+    // Closing an else block emits nothing, so it never counts as the end.
+    endsAtTopLevel = drafts.length > before && drafts.at(-1)?.name === 'end' && blocks.length === 0;
   }
   const open = blocks.at(-1);
   if (open) fail(open.line, `${open.kind} block is never closed`);
-  const last = drafts.at(-1);
   return {
     bytes: encodeScd1(drafts),
     lastLine: lines.at(-1)?.no ?? 0,
-    endsWithReturn: last?.name === 'end',
+    endsWithReturn: endsAtTopLevel,
   };
 }

@@ -75,7 +75,7 @@ pnpm rae msg-set messages.txt in.RDT out.RDT  # copy a room with its messages re
 
 `asm` takes the text `script` prints. Edit it freely: block lengths are recomputed, and `/* ... */` notes are ignored. Each procedure needs its `// init procedure N` or `// main procedure N` header; a section with no procedures in the text keeps the room's own, and a section whose bytes did not change is not written. `asm` refuses to write over its input files. It also refuses what the engine cannot run:
 
-- Every procedure except the last of its section must end with `return;`. The engine runs a procedure until it reaches an `end`, so one without would run on into the next. The assembler does not add the `return;` for you. The last procedure may leave it out because the section's closing zero word is an `end`.
+- Every procedure except the last of its section must end with `return;` outside every `if` and `else` block. The engine runs a procedure until it reaches an `end` (`end(n)` with any n counts too), so one without would run on into the next. A `return;` inside a block only ends the procedure when that branch runs. The assembler does not add the `return;` for you. The last procedure may leave it out because the section's closing zero word is an `end`.
 - `if` blocks nest at most 16 deep, the size of the engine's branch stack.
 - Enemy types are 0-48 and item ids 0-128 (or UNLOCK and LOCKED where a lock is expected), the sizes of the engine's tables.
 - `set(group, index, mode)` takes mode 0 (set), 1 (clear) or 2 (toggle).

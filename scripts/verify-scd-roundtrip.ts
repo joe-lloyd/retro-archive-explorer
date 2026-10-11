@@ -165,6 +165,16 @@ function checkRules(problems: string[]): void {
     `// main procedure 0\n${'if (ck(FG_ITEM, 1, 1)) {\n'.repeat(depth)}nop(1);\n${'}\n'.repeat(depth)}return;`;
   const refused: [string, string, string][] = [
     ['first of two procedures without return', '// init procedure 0\nnop(1);\n// init procedure 1\nreturn;', 'init procedure 0 must end with "return;"'],
+    [
+      'return only inside else',
+      '// main procedure 0\nif (true) {\nnop(1);\n} else {\nreturn;\n}\n// main procedure 1\nreturn;',
+      'line 6: main procedure 0 must end with "return;"; only the last main procedure may leave it out',
+    ],
+    [
+      'return only inside if',
+      '// init procedure 0\nif (true) {\nreturn;\n}\n// init procedure 1\nreturn;',
+      'line 4: init procedure 0 must end with "return;"; only the last init procedure may leave it out',
+    ],
     ['17 nested ifs', nested(17), 'nest more than 16 deep'],
     ['enemy type 49', `// init procedure 0\n${enemy(49)}\nreturn;`, 'enemy type 49'],
     ['item 129', '// main procedure 0\nitem_ck(129);\nreturn;', 'item 129'],
@@ -180,6 +190,8 @@ function checkRules(problems: string[]): void {
     }
   }
   const taken: [string, string][] = [
+    ['end(1) ends a procedure like return', '// main procedure 0\nend(1);\n// main procedure 1\nreturn;'],
+    ['return after an else block', '// main procedure 0\nif (true) {\nnop(1);\n} else {\nreturn;\n}\nreturn;\n// main procedure 1\nreturn;'],
     ['last procedure without return', '// main procedure 0\nnop(1);'],
     ['16 nested ifs', nested(16)],
     ['enemy type 48', `// init procedure 0\n${enemy(48)}\nreturn;`],
