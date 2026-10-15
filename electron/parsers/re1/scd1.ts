@@ -378,8 +378,45 @@ function formatArg(arg: ScdArg): string {
   }
 }
 
-function call(ins: ScdInstruction): string {
+/** One instruction as `name(operand, ...)`, without the `;`. */
+export function formatScdCall(ins: ScdInstruction): string {
   return `${ins.name}(${ins.args.map(formatArg).join(', ')})`;
+}
+
+/**
+ * Whether the text formatScd1 prints for these instructions assembles back to
+ * the same bytes. The text keeps blocks, not lengths, so that holds when every
+ * if length points at its else or endif, every else length at the first
+ * instruction after its block (or `end`, the end of the code), and every
+ * endif closes an if and has operand 0. Retail init and main scripts always
+ * pass; a few SCD blocks inside event scripts do not.
+ */
+export function scdIsCanonical(instructions: readonly ScdInstruction[], end: number): boolean {
+  const blocks: ({ kind: 'if'; target: number } | { kind: 'else'; end: number })[] = [];
+  let afterIf = false;
+  for (const ins of instructions) {
+    if (afterIf && CONDITIONS.has(ins.opcode)) continue;
+    afterIf = false;
+    for (let top = blocks.at(-1); top?.kind === 'else' && top.end <= ins.offset; top = blocks.at(-1)) {
+      if (top.end !== ins.offset) return false;
+      blocks.pop();
+    }
+    const label = ins.args[0];
+    if (ins.opcode === OP_IF) {
+      if (label?.kind !== 'label') return false;
+      blocks.push({ kind: 'if', target: label.target });
+      afterIf = true;
+    } else if (ins.opcode === OP_ELSE || ins.opcode === OP_ENDIF) {
+      const top = blocks.pop();
+      if (top?.kind !== 'if' || top.target !== ins.offset) return false;
+      if (ins.opcode === OP_ENDIF && ins.bytes[1] !== 0) return false;
+      if (ins.opcode === OP_ELSE) {
+        if (label?.kind !== 'label') return false;
+        blocks.push({ kind: 'else', end: label.target });
+      }
+    }
+  }
+  return blocks.every((b) => b.kind === 'else' && b.end === end);
 }
 
 /**
@@ -407,7 +444,7 @@ export function formatScd1(instructions: readonly ScdInstruction[]): string {
 
   for (const ins of instructions) {
     if (pending && CONDITIONS.has(ins.opcode)) {
-      pending.push(call(ins));
+      pending.push(formatScdCall(ins));
       continue;
     }
     flushIf();
@@ -425,7 +462,7 @@ export function formatScd1(instructions: readonly ScdInstruction[]): string {
     } else if (ins.opcode === 0x00 && ins.bytes[1] === 0) {
       emit('return;');
     } else {
-      emit(`${call(ins)};`);
+      emit(`${formatScdCall(ins)};`);
     }
   }
   flushIf();
