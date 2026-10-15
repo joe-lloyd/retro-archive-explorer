@@ -22,7 +22,7 @@
 // Operands are checked against what the engine accepts: enemy and item types
 // must be in its tables, `set` modes are 0 (set), 1 (clear) or 2 (toggle), and
 // `if` blocks nest at most 16 deep, the size of its branch stack.
-import { ENTITY_KINDS, EVT, EVT_OPS, lookAtIsLong, type EvtOp, type EvtState } from './evt1';
+import { COUNT_MAX, ENTITY_KINDS, EVT, EVT_OPS, lookAtIsLong, type EvtOp, type EvtState } from './evt1';
 import {
   encodeScd1, ENEMY_TYPE_COUNT, MAX_ITEM_ID, opcodeByName, parseConstant, type OpcodeInfo, type ScdArg, type ScdInstruction,
 } from './scd1';
@@ -237,8 +237,8 @@ function encodeEvtOperands(info: EvtOp, tokens: readonly string[], line: number)
     const token = tokens[k++];
     const what = `${info.name} operand ${k}`;
     const named = letter === 'k' ? ENTITY_KINDS.findIndex((n) => n === token) : -1;
-    // sleep(0) would count down from 0 and wait 65536 frames.
-    const [min, max] = info.name === 'sleep' ? [1, 0xffff] : OPERAND_RANGES[letter];
+    // The engine counts down before it tests for 0, so 65536 is stored as 0 and 0 cannot be written.
+    const [min, max] = info.name === 'sleep' ? [1, COUNT_MAX] : OPERAND_RANGES[letter];
     const value = named >= 0 ? named : parseNumber(token, line, what, min, max);
     out.push(value & 0xff);
     if (letter === 'U' || letter === 'I') out.push((value >> 8) & 0xff);
@@ -307,7 +307,7 @@ function assembleEvent(lines: SourceLine[]): Uint8Array {
     if (text === 'return;') {
       out.push(EVT.RETURN);
     } else if ((m = /^repeat\s*\((.*)\)\s*\{$/.exec(text))) {
-      const count = parseNumber(m[1].trim(), no, 'repeat count', 1, 0xffff);
+      const count = parseNumber(m[1].trim(), no, 'repeat count', 1, COUNT_MAX) & 0xffff;
       openLoop('repeat', no);
       out.push(EVT.REPEAT, 0, count & 0xff, count >> 8);
     } else if (/^do\s*\{$/.test(text)) {

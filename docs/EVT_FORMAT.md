@@ -110,8 +110,8 @@ The handlers are inline in `room_events_check`.
 | Text | Bytes | Length | What it does |
 | --- | --- | --- | --- |
 | `wait_voice();` | `F6 F7` | 2 | Waits until the voice line started by SCD `xa_on` (0x1E, which sets `MSF_VOICE_PLAYING`) ends and no menu choice is open (`g_menu_choice_id & 0x80`, tested at 0x0041d918). Yields every frame, at least once. F6 pushes a stack entry; F7 tests, pops and moves on. |
-| `sleep(n);` | `F8 F9 n:u16` | 4 | Waits n frames. F8 pushes a counter of n and falls into F9, which counts it down once per frame and moves on at 0. n is 1 to 65535; 0 would wait 65536 frames. |
-| `repeat (n) { ... }` | `FA 00 n:u16` ... `FB` | 4, 1 | Runs the body n times. FA pushes a counter and the body's address; FB counts down and jumps back until 0. Neither yields. |
+| `sleep(n);` | `F8 F9 n:u16` | 4 | Waits n frames. F8 pushes a counter of n and falls into F9, which counts it down once per frame and moves on at 0. n is 1 to 65536; the engine counts down before it tests, so a stored 0 waits 65536 frames and prints as `sleep(65536)`. |
+| `repeat (n) { ... }` | `FA 00 n:u16` ... `FB` | 4, 1 | Runs the body n times, 1 to 65536; a stored 0 runs it 65536 times and prints as `repeat (65536)`. FA pushes a counter and the body's address; FB counts down and jumps back until 0. Neither yields. |
 | `do { ... } while (cmd);` | `FC LL cmd` ... `FD` | LL, 1 | FC stores the address of `cmd`, one SCD command of LL - 2 bytes, and jumps over it to the body. FD runs `cmd` through `script_command_funcs_table` and jumps back to the body while it returns nonzero, the value that makes an SCD `if` take its block. Retail scripts use it to wait for a flag: `do { yield(); } while (ck(FG_ROOM, 33, 1));`. |
 | `yield();` | `FE` | 1 | Ends the frame for this slot. |
 | `return;` | `FF` | 1 | Deactivates the slot. |
@@ -234,7 +234,7 @@ Three forms keep retail bytes the named forms cannot hold:
   holds.
 - Loops nested more than 4 deep, or `sleep` and `wait_voice` inside 4 open
   loops, the size of the slot's stacks.
-- `sleep(0)` and `repeat (0)`, which count down from 0 and run 65536 times.
+- `sleep(0)` and `repeat (0)`. The engine would run them 65536 times; write `sleep(65536)` or `repeat (65536)` for that.
 - `anim_look_at` with 1 operand when the low 4 bits of its flags are set, or 6
   when they are clear. The engine reads the length from the flags.
 - `evt_kill` with a slot above 7, which writes past `g_ScdEventTable`.

@@ -184,6 +184,11 @@ const QUIRKS: { what: string; bytes: number[]; text: string }[] = [
     text: 'raw(0xFA, 0x00, 0x02, 0x00, 0xFE, 0x42, 0xFB, 0xFF);',
   },
   {
+    what: 'a sleep and a repeat stored with a count of 0, which the engine runs 65536 times',
+    bytes: [0xf8, 0xf9, 0x00, 0x00, 0xfa, 0x00, 0x00, 0x00, 0xfe, 0xfb, 0xff, 0x00],
+    text: 'sleep(65536);\nrepeat (65536) {\n    yield();\n}\nreturn;',
+  },
+  {
     what: 'a script that runs on into the next one, with zero bytes that are not all padding',
     bytes: [0xf8, 0xf9, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00],
     text: 'sleep(5);\nevt_nop();',
@@ -226,8 +231,9 @@ function checkRules(): void {
     ['unclosed repeat', '// event procedure 0\nrepeat (2) {\nyield();', 'line 2: repeat block is never closed'],
     ['loops 5 deep', event(loops(5, 'yield();')), 'line 6: repeat and do blocks nest at most 4 deep'],
     ['sleep inside 4 loops', event(loops(4, 'sleep(2);')), 'line 6: sleep needs a free stack entry, and 4 loops are open'],
-    ['sleep(0)', event('sleep(0);'), 'line 2: sleep operand 1 is 0, expected 1..65535'],
-    ['repeat (0)', event('repeat (0) {\nyield();\n}'), 'line 2: repeat count is 0, expected 1..65535'],
+    ['sleep(65537)', event('sleep(65537);'), 'line 2: sleep operand 1 is 65537, expected 1..65536'],
+    ['sleep(0)', event('sleep(0);'), 'line 2: sleep operand 1 is 0, expected 1..65536'],
+    ['repeat (0)', event('repeat (0) {\nyield();\n}'), 'line 2: repeat count is 0, expected 1..65536'],
     ['short look_at with a position mode', event('anim_begin();\nanim_look_at(19);'), 'line 3: anim_look_at takes 1 operand when the low 4 bits of its flags are 0'],
     ['move_speed out of range', event('move_begin();\nmove_speed(200, 0, 0);'), 'line 3: move_speed operand 1 is 200, expected -128..127'],
     ['wrong operand count', event('set_entity(ENT_PLAYER);'), 'line 2: set_entity takes 2 operands, got 1'],

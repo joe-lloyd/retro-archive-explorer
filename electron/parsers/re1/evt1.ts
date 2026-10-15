@@ -161,6 +161,13 @@ function oneScdCommand(bytes: Uint8Array, start: number, end: number): ScdInstru
   return ins;
 }
 
+/**
+ * The number of frames a sleep waits, or of passes a repeat makes. The engine
+ * counts down before it tests for 0, so a stored 0 means 65536.
+ */
+export const COUNT_MAX = 0x10000;
+const countOf = (stored: number) => stored || COUNT_MAX;
+
 /** Decode the instruction at `at`, or null when the engine would stop or hang there. */
 function decodeOne(bytes: Uint8Array, at: number, end: number, state: EvtState): Decoded | null {
   const b = bytes[at];
@@ -172,7 +179,7 @@ function decodeOne(bytes: Uint8Array, at: number, end: number, state: EvtState):
       return same({ ...base, kind: 'return', size: 1 });
     case EVT.REPEAT:
       return fits(4) && bytes[at + 1] === 0
-        ? same({ ...base, kind: 'repeat', size: 4, count: bytes[at + 2] | (bytes[at + 3] << 8) })
+        ? same({ ...base, kind: 'repeat', size: 4, count: countOf(bytes[at + 2] | (bytes[at + 3] << 8)) })
         : null;
     case EVT.REPEAT_END:
       return same({ ...base, kind: 'repeat_end', size: 1 });
@@ -213,6 +220,7 @@ function decodeOne(bytes: Uint8Array, at: number, end: number, state: EvtState):
     const size = evtOpSize(info);
     const args = fits(size) ? readOperands(bytes, at + info.code.length, info.signature) : null;
     if (!args) return null;
+    if (info.name === 'sleep') args[0] = countOf(args[0]);
     return { ins: { ...base, kind: 'op', op: info, args, size }, next: info.next === 'same' ? state : info.next };
   }
   return null;
