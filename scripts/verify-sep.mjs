@@ -78,4 +78,26 @@ assert.equal(String.fromCharCode(...midi.subarray(0, 4)), 'MThd');
 assert.deepEqual([...midi.subarray(12, 14)], [0, 48]);
 assert.equal(String.fromCharCode(...midi.subarray(14, 18)), 'MTrk');
 assert.deepEqual([...midi.subarray(-3)], [0xff, 0x2f, 0]);
+
+// A zero-length note's off follows its on; a key struck again where its last
+// note ends is released before the new on.
+const plain = { id: 0, ppq: 48, usPerQuarter: 500000, beats: 4, beatUnit: 4, ticks: 96, loop: undefined };
+const retriggered = sequenceToMidi({
+  ...plain,
+  events: [
+    { tick: 0, kind: 'note', channel: 0, key: 60, velocity: 100, length: 0 },
+    { tick: 0, kind: 'note', channel: 0, key: 62, velocity: 100, length: 48 },
+    { tick: 48, kind: 'note', channel: 0, key: 62, velocity: 90, length: 48 },
+  ],
+});
+assert.deepEqual([...retriggered.subarray(22 + 15)], [
+  0x00, 0x90, 60, 100,
+  0x00, 0x80, 60, 0,
+  0x00, 0x90, 62, 100,
+  0x30, 0x80, 62, 0,
+  0x00, 0x90, 62, 90,
+  0x30, 0x80, 62, 0,
+  0x00, 0xff, 0x2f, 0,
+]);
+
 console.log('verify-sep: ok');

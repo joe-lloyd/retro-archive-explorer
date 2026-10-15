@@ -272,8 +272,12 @@ export function sequenceToMidi(seq: Sequence): Uint8Array {
   for (const e of seq.events) {
     switch (e.kind) {
       case 'note':
+        // A note's off goes before the ons at its tick, so a key struck again
+        // there is released first. A zero-length note's off shares its own
+        // tick and must still follow its on; the stable sort keeps it right
+        // after the on it was pushed with.
         raw.push({ tick: e.tick, order: 2, bytes: [0x90 | e.channel, e.key, e.velocity] });
-        raw.push({ tick: e.tick + e.length, order: 1, bytes: [0x80 | e.channel, e.key, 0] });
+        raw.push({ tick: e.tick + e.length, order: e.length === 0 ? 2 : 1, bytes: [0x80 | e.channel, e.key, 0] });
         break;
       case 'program':
         raw.push({ tick: e.tick, order: 0, bytes: [0xc0 | e.channel, e.program] });
