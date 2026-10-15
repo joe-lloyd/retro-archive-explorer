@@ -48,6 +48,7 @@ pnpm dist       # build + package installers for the current OS (electron-builde
 pnpm icons      # regenerate build/icon.png + build/icon.ico from build/icon.svg
 pnpm verify:rdt1  # check the RE1 room and script decoder against a synthetic room
 pnpm verify:sep   # check the PS1 music parser (VAB bank, SEP sequences) against a synthetic file
+pnpm verify:evt   # check the event script decoder and assembler on a synthetic room; add <image | dir> to round-trip real rooms
 pnpm demo:disc out/demo.iso  # build a demo ISO with no game data (macOS, uses hdiutil)
 node scripts/verify-scd-roundtrip.mjs <image | dir>...  # round-trip every room script through the assembler
 node scripts/verify-msg-roundtrip.mjs <image | dir>...  # round-trip every room message and rewrite sample rooms
@@ -64,7 +65,7 @@ pnpm rae extract re1.bin out/             # copy every file out and convert what
 pnpm rae music   re1.bin music/           # RE1's music: bank and notes as JSON, MIDI, samples as WAV
 pnpm rae rooms   re1.bin                  # one line per room: cameras, enemies, items, doors
 pnpm rae room    re1.bin ROOM1000.RDT     # cameras, placements and sections of one room
-pnpm rae script  re1.bin ROOM1000.RDT     # decompiled init and main room scripts
+pnpm rae script  re1.bin ROOM1000.RDT     # decompiled init, main and event room scripts
 pnpm rae dump    re1.bin ROOM1000.RDT     # diagnostics/<name>.json plus the raw bytes
 pnpm rae swap-enemy ROOM1040.RDT out.RDT 0x11 0 28  # copy a room with one enemy type swapped
 pnpm rae asm     script.c in.RDT out.RDT  # assemble edited script text into a copy of a room
@@ -75,18 +76,18 @@ pnpm rae msg-set messages.txt in.RDT out.RDT  # copy a room with its messages re
 
 `room` and `script` also take a single extracted `.RDT` path. `extract` writes TIM as PNG, VAG as WAV, and each VAB sample as its own WAV. Each room gets a `<name>.RDT.d/` folder with its sections, `script.c`, `room.txt` and `room.json`. STR and XA files are copied as 2048-byte user data, so their Form 2 sectors are not usable yet.
 
-`asm` takes the text `script` prints. Edit it freely: block lengths are recomputed, and `/* ... */` notes are ignored. Each procedure needs its `// init procedure N` or `// main procedure N` header, in lower case, numbered 0, 1, 2 within each section. A comment that looks like a header but is misspelled, a number out of order and a repeated number are errors. A section with no procedures in the text keeps the room's own, and a section whose bytes did not change is not written. `asm` refuses to write over its input files. It also refuses what the engine cannot run:
+`asm` takes the text `script` prints. Edit it freely: block lengths are recomputed, and `/* ... */` notes are ignored. Each procedure needs its `// init procedure N`, `// main procedure N` or `// event procedure N` header, in lower case, numbered 0, 1, 2 within each section. A comment that looks like a header but is misspelled, a number out of order and a repeated number are errors. A section with no procedures in the text keeps the room's own, and a section whose bytes did not change is not written. `asm` refuses to write over its input files. It also refuses what the engine cannot run:
 
-- Every procedure except the last of its section must end with `return;` outside every `if` and `else` block. The engine runs a procedure until it reaches an `end` (`end(n)` with any n counts too), so one without would run on into the next. A `return;` inside a block only ends the procedure when that branch runs. The assembler does not add the `return;` for you. The last procedure may leave it out because the section's closing zero word is an `end`.
+- Every init and main procedure except the last of its section must end with `return;` outside every `if` and `else` block. The engine runs a procedure until it reaches an `end` (`end(n)` with any n counts too), so one without would run on into the next. A `return;` inside a block only ends the procedure when that branch runs. The assembler does not add the `return;` for you. The last procedure may leave it out because the section's closing zero word is an `end`.
 - `if` blocks nest at most 16 deep, the size of the engine's branch stack.
 - Enemy types are 0-48 and item ids 0-128 (or UNLOCK and LOCKED where a lock is expected), the sizes of the engine's tables.
 - `set(group, index, mode)` takes mode 0 (set), 1 (clear) or 2 (toggle).
 
-Written sections go behind the old data, then the room's `snd.vb` is copied behind them and the offset table is pointed at the new places. The engine uses the memory from `snd.vb` onward as scratch space for enemy models, so anything left after it would be overwritten. A second write to a room that was already written reuses that last `snd.vb` instead of leaving a copy each time. The result is refused if it would leave less than 471,728 bytes of the engine's 832,728-byte room buffer for enemy models, the least any retail room has, or less than the original room had when that is smaller. Rooms that fit are the ones with enough headroom; for the largest rooms the check refuses any growth. `verify-scd-roundtrip.mjs` takes a disc image or a directory of `.RDT` files and proves each init and main procedure survives decode, text and assemble byte for byte. `flags` reads only init and main scripts; event scripts are not decoded, so an index it lists as unused may still be used there.
+Written sections go behind the old data, then the room's `snd.vb` is copied behind them and the offset table is pointed at the new places. The engine uses the memory from `snd.vb` onward as scratch space for enemy models, so anything left after it would be overwritten. A second write to a room that was already written reuses that last `snd.vb` instead of leaving a copy each time. The result is refused if it would leave less than 471,728 bytes of the engine's 832,728-byte room buffer for enemy models, the least any retail room has, or less than the original room had when that is smaller. Rooms that fit are the ones with enough headroom; for the largest rooms the check refuses any growth. `verify-scd-roundtrip.mjs` takes a disc image or a directory of `.RDT` files and proves each init and main procedure survives decode, text and assemble byte for byte. `flags` reads init, main and event scripts.
 
 ### Room messages
 
-`msg` prints one message per line as `index: text`, and `msg-set` writes a copy of a room with its messages replaced from a file in the same format. Blank lines are skipped. Indexes must run 0, 1, 2 without gaps, and a line is `index:`, one space, then the text. A room holds at most 64 messages (the engine picks one with `msg_id & 0x3F`). Adding messages at the end is always accepted. Removing any is refused unless you pass `--force`, because a script can show a message by number and event scripts are not decoded, so nothing proves one does not.
+`msg` prints one message per line as `index: text`, and `msg-set` writes a copy of a room with its messages replaced from a file in the same format. Blank lines are skipped. Indexes must run 0, 1, 2 without gaps, and a line is `index:`, one space, then the text. A room holds at most 64 messages (the engine picks one with `msg_id & 0x3F`). Adding messages at the end is always accepted. Removing any is refused unless you pass `--force`, because a script or a message zone can show a message by number.
 
 Text uses the escapes of the `STR()` macro in the Resident Evil PC decomp (`src/Globals.cpp`). The one difference: `STR()` reads an operand from the next character, so here an operand is written as `{N}`, a decimal number from 0 to 255. Every byte of a message has a spelling, so decoding loses nothing.
 
@@ -111,7 +112,28 @@ Anything else is an error that names its position: a character with no glyph, an
 
 The new message section goes behind the old data in the same layout as scripts, and the 0x74 pointer is moved to it. `LoadRoomRdt` adds the file's base address to every entry of the offset table at 0x48, 0x74 included, and nothing else points into the old section, so the engine finds the new one. Scripts and messages can both be replaced on one file, in either order.
 
-The RE1 room layout and script opcodes are ported from [biohazard-utils](https://github.com/biorand/biohazard-utils) (MIT). Event scripts (cutscenes) are listed by offset but not decoded yet.
+### Event scripts
+
+Event scripts run cutscenes and other scripted sequences. `script` prints each one under `// event procedure N`, and `asm` writes them back: the event table and the scripts go behind the old data like the other sections. They are a different bytecode from init and main, read by a VM with three states, so the same byte means different things before and after `anim_begin()` or `move_begin()`. A short example:
+
+```c
+// event procedure 0
+set_entity(ENT_ENEMY, 1);
+anim_begin();
+    anim_play(34, 35, 0);
+    sleep(30);
+anim_end_release();
+evt_nop();
+do {
+    yield();
+} while (ck(FG_ROOM, 4, 1));
+set(FG_ROOM, 5, 0);
+return;
+```
+
+[docs/EVT_FORMAT.md](docs/EVT_FORMAT.md) lists every opcode with its operands and the engine function it comes from, and the rules `asm` checks. `pnpm verify:evt <image | dir>` proves every event script of the rooms given round-trips byte for byte; it also reads a path list from `RAE_ROOMS`.
+
+The RE1 room layout and SCD opcodes are ported from [biohazard-utils](https://github.com/biorand/biohazard-utils) (MIT). The event script format is read from the decompiled PC port, [resident-evil-pc-decomp](https://github.com/joe-lloyd/resident-evil-pc-decomp).
 
 The app is bundled with [electron-vite](https://electron-vite.org): `electron/main.ts` and `electron/preload.ts` compile to `out/main` and `out/preload`, and the React renderer (root `index.html` → `src/`) to `out/renderer`.
 
