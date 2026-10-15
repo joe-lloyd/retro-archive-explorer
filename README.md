@@ -47,6 +47,7 @@ pnpm build      # electron-vite build -> out/ (main, preload, renderer)
 pnpm dist       # build + package installers for the current OS (electron-builder)
 pnpm icons      # regenerate build/icon.png + build/icon.ico from build/icon.svg
 pnpm verify:rdt1  # check the RE1 room and script decoder against a synthetic room
+pnpm verify:sep   # check the PS1 music parser (VAB bank, SEP sequences) against a synthetic file
 pnpm demo:disc out/demo.iso  # build a demo ISO with no game data (macOS, uses hdiutil)
 node scripts/verify-scd-roundtrip.mjs <image | dir>...  # round-trip every room script through the assembler
 node scripts/verify-msg-roundtrip.mjs <image | dir>...  # round-trip every room message and rewrite sample rooms
@@ -60,6 +61,7 @@ node scripts/verify-msg-roundtrip.mjs <image | dir>...  # round-trip every room 
 pnpm rae list    re1.bin rdt              # list files, optionally by extension
 pnpm rae find    re1.bin ROOM10           # list files whose path matches
 pnpm rae extract re1.bin out/             # copy every file out and convert what it can
+pnpm rae music   re1.bin music/           # RE1's music: bank and notes as JSON, MIDI, samples as WAV
 pnpm rae rooms   re1.bin                  # one line per room: cameras, enemies, items, doors
 pnpm rae room    re1.bin ROOM1000.RDT     # cameras, placements and sections of one room
 pnpm rae script  re1.bin ROOM1000.RDT     # decompiled init and main room scripts

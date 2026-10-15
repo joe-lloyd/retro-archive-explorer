@@ -9,6 +9,9 @@
 //   room    <image> <path> | <file.rdt>   room summary: cameras, enemies, items, doors
 //   script  <image> <path> | <file.rdt>   decompiled init and main room scripts
 //   rooms   <image>                  one line per room across the whole disc
+//   music   <image> <outdir>         RE1's sequenced music (SOUND/*.HSB): per file a
+//                                    JSON of its bank and sequences, a MIDI file per
+//                                    sequence, and every sample as a 44.1 kHz WAV
 //   asm     <script.c> <in.rdt> <out.rdt>   assemble script text into a copy of a room
 //   msg     <image> <path> | <file.rdt>   room messages, one per line as `index: text`
 //   msg-set <messages.txt> <in.rdt> <out.rdt> [--force]   replace a room's messages from that format
@@ -20,6 +23,7 @@ import { fail, findFile, openDisc, readFile, roomFiles } from './disc';
 import { parseTim } from '../electron/parsers/timParser';
 import { parseModel } from '../electron/parsers/tmdParser';
 import { decodeAdpcm, decodeVag, parseAudio, pcmToWav, vabSamples } from '../electron/parsers/audio/psxAudio';
+import { adpcmLoop, parseHsb, sequenceToMidi } from '../electron/parsers/audio/psxSeq';
 import { interpretRe1 } from '../electron/parsers/re1/registry';
 import {
   formatScripts, isEmptyRoomSlot, parseRdt1, readRdtMessages, replaceRdtMessages, replaceRdtSections, type Rdt1,
@@ -37,6 +41,7 @@ const USAGE = `usage: pnpm rae <command> ...
   room    <image> <path> | <file.rdt>
   script  <image> <path> | <file.rdt>
   rooms   <image>
+  music   <image> <outdir>
   swap-enemy <in.rdt> <out.rdt> <from-type> <to-type> [kill-id]
   asm     <script.c> <in.rdt> <out.rdt>
   msg     <image> <path> | <file.rdt>
@@ -225,6 +230,36 @@ function extract(image: string, outDir: string): void {
   }
   console.log(`extracted ${disc.files.length} files to ${outDir} (${failures} with failures)`);
   if (failures) process.exitCode = 1;
+}
+
+/**
+ * RE1's music: each SOUND/*.HSB is a room group's bank and sequences. The
+ * samples play at 44.1 kHz at their tone's centre key, as on the SPU.
+ */
+function music(image: string, outDir: string): void {
+  const disc = openDisc(image);
+  const files = disc.files.filter((f) => f.node.extension === 'hsb');
+  if (files.length === 0) fail(`no .HSB music files on ${image}`);
+  mkdirSync(outDir, { recursive: true });
+  for (const file of files) {
+    const bytes = readFile(disc, file);
+    const name = path.basename(file.node.name, path.extname(file.node.name));
+    const hsb = parseHsb(new Uint8Array(bytes));
+    const sampleDir = path.join(outDir, name);
+    mkdirSync(sampleDir, { recursive: true });
+    const samples = hsb.samples.map((s, i) => {
+      const adpcm = bytes.subarray(s.offset, s.offset + s.size);
+      const pcm = decodeAdpcm(adpcm);
+      const wav = `s${String(i).padStart(2, '0')}.wav`;
+      writeFileSync(path.join(sampleDir, wav), pcmToWav(pcm, 44100));
+      return { index: i, file: `${name}/${wav}`, frames: pcm.length, loop: adpcmLoop(adpcm) };
+    });
+    hsb.sequences.forEach((seq, i) => writeFileSync(path.join(outDir, `${name}-${i}.mid`), sequenceToMidi(seq)));
+    writeFileSync(path.join(outDir, `${name}.json`), JSON.stringify({ file: file.node.path, bank: hsb.bank, sequences: hsb.sequences, samples }, null, 1));
+    const notes = hsb.sequences.map((q) => q.events.filter((e) => e.kind === 'note').length);
+    console.log(`${name}: ${hsb.bank.programs.length} programs, ${samples.length} samples, sequences with ${notes.join(' / ')} notes`);
+  }
+  disc.reader.close();
 }
 
 function roomsIndex(image: string): void {
@@ -513,6 +548,12 @@ function main(): void {
       const [image] = args;
       if (!image) fail(USAGE);
       roomsIndex(image);
+      return;
+    }
+    case 'music': {
+      const [image, outDir] = args;
+      if (!image || !outDir) fail(USAGE);
+      music(image, outDir);
       return;
     }
     case 'swap-enemy':
