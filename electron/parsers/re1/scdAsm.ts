@@ -4,7 +4,8 @@
 // with a `// init procedure N` or `// main procedure N` header (anything after
 // that, such as `@ 0x11e`, is ignored). Block lengths are recomputed from the
 // content, so lines can be added or removed. Comments and the `/* Beretta */`
-// notes after operands are dropped.
+// notes after operands are dropped. A `/* ... */` comment may span lines, and
+// a header inside one is part of the comment.
 //
 // A header that is spelled wrong (`// MAIN procedure 1`, `// main procdure 1`)
 // is an error, and the numbers must run 0, 1, 2 within each section.
@@ -66,12 +67,48 @@ function fail(line: number, message: string): never {
   throw new Error(`line ${line}: ${message}`);
 }
 
+/**
+ * The part of a line outside block comments, given whether a block comment is
+ * open where the line starts. `inComment` says whether one is still open at its
+ * end and `opened` whether this line opened it. A `//` outside a block comment
+ * keeps the rest of the line as a line comment, a `/*` in it included.
+ */
+function outsideBlockComments(line: string, inComment: boolean): { text: string; inComment: boolean; opened: boolean } {
+  let text = '';
+  let opened = false;
+  let i = 0;
+  while (i < line.length) {
+    if (inComment) {
+      const close = line.indexOf('*/', i);
+      if (close < 0) return { text, inComment, opened };
+      inComment = false;
+      opened = false;
+      i = close + 2;
+    } else if (line.startsWith('//', i)) {
+      return { text: text + line.slice(i), inComment, opened };
+    } else if (line.startsWith('/*', i)) {
+      inComment = true;
+      opened = true;
+      i += 2;
+    } else {
+      text += line[i];
+      i += 1;
+    }
+  }
+  return { text, inComment, opened };
+}
+
 export function assembleScd1(text: string): AssembledScripts {
   const procedures: Record<ScriptKind, SourceLine[][]> = { init: [], main: [] };
   let current: SourceLine[] | undefined;
+  let inComment = false;
+  let commentLine = 0;
   text.split(/\r?\n/).forEach((raw, i) => {
     const no = i + 1;
-    const trimmed = raw.trim();
+    const visible = outsideBlockComments(raw, inComment);
+    inComment = visible.inComment;
+    if (visible.opened) commentLine = no;
+    const trimmed = visible.text.trim();
     const header = HEADER.exec(trimmed);
     if (header) {
       const kind = header[1] as ScriptKind;
@@ -86,11 +123,12 @@ export function assembleScd1(text: string): AssembledScripts {
     if (HEADER_LIKE.test(trimmed)) {
       fail(no, `"${trimmed}" looks like a procedure header but is not "// init procedure N" or "// main procedure N" in lower case`);
     }
-    const code = raw.replace(/\/\*.*?\*\//g, '').replace(/\/\/.*$/, '').trim();
+    const code = trimmed.replace(/\/\/.*$/, '').trim();
     if (!code) return;
     if (!current) fail(no, 'code before the first "// init procedure" or "// main procedure" header');
     current.push({ no, text: code });
   });
+  if (inComment) fail(commentLine, 'block comment "/*" is never closed by "*/"');
   const assemble = (kind: ScriptKind): Uint8Array[] =>
     procedures[kind].map(assembleProcedure).map((p, i, all) => {
       if (i < all.length - 1 && !p.endsWithReturn) {

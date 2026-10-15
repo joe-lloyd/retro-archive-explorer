@@ -1,6 +1,6 @@
 // Builds a tiny synthetic RE1 room file from the documented layout, runs the
-// CLI's `room`, `script`, `msg` and `msg-set` commands on it, and checks the
-// literal output.
+// CLI's `room`, `script`, `asm`, `msg` and `msg-set` commands on it, and checks
+// the literal output.
 // This proves the decoder follows the documented layout; it does not prove the
 // layout matches retail discs. Run: node scripts/verify-rdt1.mjs
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -65,6 +65,11 @@ writeFileSync(file, bytes);
 const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cli.mjs');
 const runOn = (...args) => execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
 const run = (cmd) => runOn(cmd, file);
+/** The CLI's error output for a command that must fail. */
+const runFailing = (...args) => {
+  const r = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+  return r.status === 0 ? `exited 0:\n${r.stdout}` : r.stderr;
+};
 const write = (name, text) => {
   const at = path.join(dir, name);
   writeFileSync(at, text);
@@ -79,11 +84,12 @@ const expectRoom = [
   '  item  #1  Beretta x15 at (300, 400)',
   '  door  #2  -> ROOM_203 at (10, 20), arrive (1, 2, 3), lock 0',
 ];
-const expectScript = `// init procedure 0 @ 0x${INIT_AT.toString(16)}
+const expectInit = `// init procedure 0 @ 0x${INIT_AT.toString(16)}
 enemy(0 /* Zombie (White Coat) */, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 100, 0, -200, 3, 0, 0, 0);
 item_aot_set(1, 300, 400, 500, 500, 2 /* Beretta */, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 return;
-
+`;
+const expectScript = `${expectInit}
 // main procedure 0 @ 0x${MAIN_AT.toString(16)}
 if (ck(FG_ITEM, 5, 1)) {
     door_aot_set(2, 10, 20, 30, 40, 0, 0, 0, 0, 0, ROOM_203, 1, 2, 3, 0, UNLOCKED, 0);
@@ -119,5 +125,46 @@ if (gotMsg !== expectMsg) {
   console.error(`msg-set: mismatch\n--- expected\n${expectMsg}--- actual\n${gotMsg}`);
 }
 
+// asm drops block comments that span lines, a header inside one included.
+const asmOut = path.join(dir, 'ASM.RDT');
+const commented = write('commented.scd', [
+  '/* Notes on this room.',
+  '// main procedure 1',
+  'bgm_play(9);',
+  '*/',
+  '// main procedure 0',
+  'bgm_play(3); /* first */',
+  '/* a note that',
+  '   runs over lines */ bgm_play(4);',
+  'return;',
+  '',
+].join('\n'));
+const asmRun = spawnSync(process.execPath, [cli, 'asm', commented, file, asmOut], { encoding: 'utf8' });
+// snd.vb is the file's last section, so the new main.scd starts where it did, on a 4-byte boundary.
+const expectAsm = `${expectInit}
+// main procedure 0 @ 0x${(Math.ceil(VB_AT / 4) * 4).toString(16)}
+bgm_play(3);
+bgm_play(4);
+return;
+`;
+const gotAsm = asmRun.status === 0 ? runOn('script', asmOut) : `asm failed: ${asmRun.stderr}`;
+if (gotAsm !== expectAsm) {
+  failed++;
+  console.error(`asm: mismatch\n--- expected\n${expectAsm}--- actual\n${gotAsm}`);
+}
+
+// Errors after a block comment name the right line, and an unclosed one is refused.
+const asmErrors = [
+  ['// main procedure 0\n/* two\n   lines */\nbogus\n', 'line 4: cannot parse: bogus'],
+  ['// main procedure 0\nreturn; /* never\nclosed\n', 'line 2: block comment "/*" is never closed by "*/"'],
+];
+asmErrors.forEach(([text, want], k) => {
+  const got = runFailing('asm', write(`bad${k}.scd`, text), file, asmOut);
+  if (!got.includes(want)) {
+    failed++;
+    console.error(`asm error ${k}: expected ${JSON.stringify(want)}, got\n${got}`);
+  }
+});
+
 if (failed) process.exit(1);
-console.log('ok: room, script and msg-set output match');
+console.log('ok: room, script, asm and msg-set output match');
