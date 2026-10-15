@@ -7,7 +7,7 @@
 //                                    TIM -> PNG, VAG -> WAV, VAB -> WAV samples,
 //                                    RDT -> sections, script.c and room.json
 //   room    <image> <path> | <file.rdt>   room summary: cameras, enemies, items, doors
-//   script  <image> <path> | <file.rdt>   decompiled init and main room scripts
+//   script  <image> <path> | <file.rdt>   decompiled init, main and event room scripts
 //   rooms   <image>                  one line per room across the whole disc
 //   music   <image> <outdir>         RE1's sequenced music (SOUND/*.HSB): per file a
 //                                    JSON of its bank and sequences, a MIDI file per
@@ -26,7 +26,8 @@ import { decodeAdpcm, decodeVag, parseAudio, pcmToWav, vabSamples } from '../ele
 import { adpcmLoop, parseHsb, sequenceToMidi } from '../electron/parsers/audio/psxSeq';
 import { interpretRe1 } from '../electron/parsers/re1/registry';
 import {
-  formatScripts, isEmptyRoomSlot, parseRdt1, readRdtMessages, replaceRdtMessages, replaceRdtSections, type Rdt1,
+  encodeEventSection, formatScripts, isEmptyRoomSlot, parseRdt1, readRdtMessages, replaceRdtMessages, replaceRdtSections,
+  type Rdt1,
 } from '../electron/parsers/re1/rdt1';
 import { encodeMessage, formatMessages, parseMessages } from '../electron/parsers/re1/msg1';
 import { assembleScd1 } from '../electron/parsers/re1/scdAsm';
@@ -331,8 +332,8 @@ function swapEnemy(args: string[]): void {
 
 /**
  * Assemble script text (the format `script` prints) and write a copy of a room
- * whose init and main procedures are the assembled ones. A script section with
- * no procedures in the text keeps the room's own.
+ * whose init, main and event procedures are the assembled ones. A script
+ * section with no procedures in the text keeps the room's own.
  */
 function asm(args: string[]): void {
   const [scriptPath, src, dest] = args;
@@ -342,13 +343,14 @@ function asm(args: string[]): void {
     if (path.resolve(input) === path.resolve(dest)) fail(`out.rdt must differ from ${input}; asm writes a copy`);
   }
   const scripts = assembleScd1(readFileSync(scriptPath, 'utf8'));
-  if (scripts.init.length + scripts.main.length === 0) {
-    fail(`${scriptPath} has no "// init procedure" or "// main procedure" blocks`);
+  if (scripts.init.length + scripts.main.length + scripts.event.length === 0) {
+    fail(`${scriptPath} has no "// init procedure", "// main procedure" or "// event procedure" blocks`);
   }
   const original = new Uint8Array(readFileSync(src));
   const out = replaceRdtSections(original, {
     init: scripts.init.length ? scripts.init : undefined,
     main: scripts.main.length ? scripts.main : undefined,
+    event: scripts.event.length ? scripts.event : undefined,
   });
   // Read the new room back to prove the writer produced what was assembled.
   const room = parseRdt1(out);
@@ -359,6 +361,14 @@ function asm(args: string[]): void {
       fail(`${kind} procedures read back from the new room differ from the assembled ones`);
     }
   }
+  const events = room.sections.find((s) => s.name === 'events.scd');
+  if (scripts.event.length) {
+    const want = encodeEventSection(scripts.event);
+    const at = events?.offset ?? -1;
+    if (room.events.length !== scripts.event.length || !Buffer.from(out.subarray(at, at + want.length)).equals(want)) {
+      fail('event procedures read back from the new room differ from the assembled ones');
+    }
+  }
   writeFileSync(dest, out);
   // replaceRdtSections leaves a section alone when its bytes are already the room's.
   const was = parseRdt1(original);
@@ -366,7 +376,12 @@ function asm(args: string[]): void {
     scripts[kind].length && room[kind][0].offset !== was[kind][0]?.offset
       ? `${kind} ${scripts[kind].length} procedure(s) written at 0x${room[kind][0].offset.toString(16)}`
       : `${kind} unchanged`;
-  console.log(`wrote ${dest}: ${describe('init')}, ${describe('main')}`);
+  const wasEvents = was.sections.find((s) => s.name === 'events.scd');
+  const event =
+    scripts.event.length && events && events.offset !== wasEvents?.offset
+      ? `event ${scripts.event.length} procedure(s) written at 0x${events.offset.toString(16)}`
+      : 'event unchanged';
+  console.log(`wrote ${dest}: ${describe('init')}, ${describe('main')}, ${event}`);
 }
 
 /**

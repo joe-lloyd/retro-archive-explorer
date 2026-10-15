@@ -8,6 +8,7 @@
 //
 // Section lengths are not stored. A section runs to the next known offset.
 import { encodeMessageSection, readMessageSection, type RawMessage } from './msg1';
+import { formatEvt1, readEvt1, type EvtInstruction } from './evt1';
 import { enemyName, formatScd1, itemName, readScd1, roomName, type ScdInstruction } from './scd1';
 
 const OFFSETS_AT = 0x48;
@@ -63,6 +64,11 @@ export interface Procedure {
   instructions: ScdInstruction[];
 }
 
+/** An event script: where it starts, the bytes up to the next one, and what they decode to. */
+export interface EventProcedure extends RdtSection {
+  instructions: EvtInstruction[];
+}
+
 export type Placement =
   | { kind: 'enemy'; offset: number; id: number; type: number; name: string; pos: Vec3; facing: number; state: number }
   | { kind: 'item'; offset: number; id: number; type: number; name: string; amount: number; x: number; z: number }
@@ -84,7 +90,7 @@ export interface Rdt1 {
   cameraSwitches: RdtCameraSwitch[];
   init: Procedure[];
   main: Procedure[];
-  events: RdtSection[];
+  events: EventProcedure[];
   placements: Placement[];
 }
 
@@ -109,7 +115,7 @@ function readProcedures(bytes: Uint8Array, section: RdtSection | undefined): Pro
 }
 
 /** The events section starts with a 0-terminated table of u32 offsets relative to itself. */
-function readEvents(bytes: Uint8Array, section: RdtSection | undefined): RdtSection[] {
+function readEvents(bytes: Uint8Array, section: RdtSection | undefined): EventProcedure[] {
   if (!section) return [];
   const dv = view(bytes);
   const starts: number[] = [];
@@ -120,11 +126,15 @@ function readEvents(bytes: Uint8Array, section: RdtSection | undefined): RdtSect
     if (rel === 0 || rel >= section.size || start <= (starts.at(-1) ?? at)) break;
     starts.push(start);
   }
-  return starts.map((offset, i) => ({
-    name: `event_${i.toString(16).toUpperCase().padStart(2, '0')}`,
-    offset,
-    size: (starts[i + 1] ?? section.offset + section.size) - offset,
-  }));
+  return starts.map((offset, i) => {
+    const end = starts[i + 1] ?? section.offset + section.size;
+    return {
+      name: `event_${i.toString(16).toUpperCase().padStart(2, '0')}`,
+      offset,
+      size: end - offset,
+      instructions: readEvt1(bytes, offset, end),
+    };
+  });
 }
 
 function placementOf(ins: ScdInstruction): Placement | null {
@@ -292,20 +302,29 @@ export function parseRdt1(bytes: Uint8Array): Rdt1 {
   };
 }
 
-/** Every init and main procedure as pseudo-C, each under a `// init procedure N @ 0x...` header. */
+/** Every init, main and event procedure as pseudo-C, each under a `// init procedure N @ 0x...` header. */
 export function formatScripts(rdt: Rdt1): string {
   const block = (kind: string, procs: Procedure[]) =>
     procs.map((p, i) => `// ${kind} procedure ${i} @ 0x${p.offset.toString(16)}\n${formatScd1(p.instructions)}`);
-  return [...block('init', rdt.init), ...block('main', rdt.main)].join('\n\n') + '\n';
+  const events = rdt.events.map((p, i) => `// event procedure ${i} @ 0x${p.offset.toString(16)}\n${formatEvt1(p.instructions)}`);
+  return [...block('init', rdt.init), ...block('main', rdt.main), ...events].join('\n\n') + '\n';
 }
 
-/** Procedure bodies (opcodes only, no size prefix) to write in place of a room's scripts. */
+/**
+ * Procedure bodies to write in place of a room's scripts: SCD opcodes without
+ * the size prefix for init and main, event script bytes without padding.
+ */
 export interface ScriptReplacements {
   init?: readonly Uint8Array[];
   main?: readonly Uint8Array[];
+  event?: readonly Uint8Array[];
 }
 
-const SCRIPT_SLOTS = { init: SECTION_NAMES.indexOf('init.scd'), main: SECTION_NAMES.indexOf('main.scd') };
+const SCRIPT_SLOTS = {
+  init: SECTION_NAMES.indexOf('init.scd'),
+  main: SECTION_NAMES.indexOf('main.scd'),
+  event: SECTION_NAMES.indexOf('events.scd'),
+};
 const SCRIPT_ALIGN = 4;
 const MESSAGE_SLOT = SECTION_NAMES.indexOf('message.msg');
 const VB_AT = OFFSETS_AT + SECTION_NAMES.indexOf('snd.vb') * 4;
@@ -324,6 +343,28 @@ function encodeProcedures(bodies: readonly Uint8Array[]): Uint8Array {
     out.set(body, at + 2);
     at += body.length + 2;
   }
+  return out;
+}
+
+/**
+ * The events section: u32 offsets relative to its own start, a 0 entry, then
+ * each script padded with zeros to 4 bytes, as retail rooms store them.
+ * LoadRoomRdt adds the section's address to each entry up to the 0.
+ */
+export function encodeEventSection(bodies: readonly Uint8Array[]): Uint8Array {
+  if (bodies.some((b) => b.length === 0)) throw new Error('an event script needs at least one byte');
+  const starts: number[] = [];
+  let end = (bodies.length + 1) * 4;
+  for (const body of bodies) {
+    starts.push(end);
+    end = align(end + body.length);
+  }
+  const out = new Uint8Array(end);
+  const dv = view(out);
+  bodies.forEach((body, i) => {
+    dv.setUint32(i * 4, starts[i], true);
+    out.set(body, starts[i]);
+  });
   return out;
 }
 
@@ -416,15 +457,16 @@ function appendSections(original: Uint8Array, wanted: readonly { slot: number; b
 }
 
 /**
- * Copy a room with new init and/or main scripts written behind the old data
- * (see appendSections) and the offset table pointed at them. Only the offset table points at
- * the script sections; the event table is relative to its own start and the
- * scripts hold no file offsets.
+ * Copy a room with new init, main and/or event scripts written behind the old
+ * data (see appendSections) and the offset table pointed at them. Only the
+ * offset table points at the script sections; the event table is relative to
+ * its own start, and the scripts hold no file offsets.
  */
 export function replaceRdtSections(original: Uint8Array, replacements: ScriptReplacements): Uint8Array {
-  const appended = (['init', 'main'] as const).flatMap((kind) => {
+  const appended = (['init', 'main', 'event'] as const).flatMap((kind) => {
     const bodies = replacements[kind];
-    return bodies ? [{ slot: SCRIPT_SLOTS[kind], bytes: encodeProcedures(bodies) }] : [];
+    if (!bodies) return [];
+    return [{ slot: SCRIPT_SLOTS[kind], bytes: kind === 'event' ? encodeEventSection(bodies) : encodeProcedures(bodies) }];
   });
   return appendSections(original, appended);
 }
