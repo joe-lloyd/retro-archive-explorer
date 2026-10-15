@@ -100,4 +100,12 @@ assert.deepEqual([...retriggered.subarray(22 + 15)], [
   0x00, 0xff, 0x2f, 0,
 ]);
 
+// 20,000 notes make a 160,019-byte track, more than a call takes as arguments.
+const long = sequenceToMidi({
+  ...plain,
+  ticks: 80000,
+  events: Array.from({ length: 20000 }, (_, i) => ({ tick: i * 4, kind: 'note', channel: 0, key: 60, velocity: 100, length: 2 })),
+});
+assert.equal(long.length, 22 + 15 + 20000 * 8 + 4);
+assert.deepEqual([...long.subarray(18, 22)], [0x00, 0x02, 0x71, 0x13]);
 console.log('verify-sep: ok');

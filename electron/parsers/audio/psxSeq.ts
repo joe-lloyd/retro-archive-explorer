@@ -258,7 +258,6 @@ export function adpcmLoop(data: Uint8Array): { start: number; end: number } | un
 
 /** A standard MIDI file (format 0) of one sequence, so any player or editor can open its notes. */
 export function sequenceToMidi(seq: Sequence): Uint8Array {
-  const out: number[] = [];
   const vlqBytes = (v: number) => {
     const bytes = [v & 0x7f];
     while ((v >>= 7)) bytes.unshift((v & 0x7f) | 0x80);
@@ -308,7 +307,13 @@ export function sequenceToMidi(seq: Sequence): Uint8Array {
   }
   track.push(...vlqBytes(Math.max(0, seq.ticks - last)), 0xff, 0x2f, 0);
   const be32 = (v: number) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
-  out.push(...[...'MThd'].map((c) => c.charCodeAt(0)), ...be32(6), 0, 0, 0, 1, (seq.ppq >> 8) & 0xff, seq.ppq & 0xff);
-  out.push(...[...'MTrk'].map((c) => c.charCodeAt(0)), ...be32(track.length), ...track);
-  return Uint8Array.from(out);
+  const header = [
+    ...[...'MThd'].map((c) => c.charCodeAt(0)), ...be32(6), 0, 0, 0, 1, (seq.ppq >> 8) & 0xff, seq.ppq & 0xff,
+    ...[...'MTrk'].map((c) => c.charCodeAt(0)), ...be32(track.length),
+  ];
+  // Copied rather than spread: a long track has more bytes than a call takes arguments.
+  const out = new Uint8Array(header.length + track.length);
+  out.set(header);
+  out.set(track, header.length);
+  return out;
 }
