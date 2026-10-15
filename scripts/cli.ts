@@ -30,6 +30,7 @@ import {
   type Rdt1,
 } from '../electron/parsers/re1/rdt1';
 import { encodeMessage, formatMessages, parseMessages } from '../electron/parsers/re1/msg1';
+import { evtScdInstructions } from '../electron/parsers/re1/evt1';
 import { assembleScd1 } from '../electron/parsers/re1/scdAsm';
 import { encodeScd1, enemyName, FLAG_GROUPS, type ScdArg } from '../electron/parsers/re1/scd1';
 import { encodePng } from './png';
@@ -387,8 +388,8 @@ function asm(args: string[]): void {
 /**
  * Replace a room's messages with the `index: text` lines `msg` prints. Adding
  * messages at the end is always fine. Removing any is refused without --force:
- * a script may still show a message by number, and event scripts are not
- * decoded, so there is no way to prove one does not.
+ * the error names the messages a message instruction shows, but a message
+ * zone (aot_set with SCE_MESSAGE) can show one too.
  */
 function msgSet(args: string[]): void {
   const force = args.includes('--force');
@@ -403,8 +404,7 @@ function msgSet(args: string[]): void {
   const out = replaceRdtMessages(original, texts);
   if (texts.length < had && !force) {
     const room = parseRdt1(original);
-    const shown = [...room.init, ...room.main]
-      .flatMap((p) => p.instructions)
+    const shown = scdOf(room)
       .filter((ins) => ins.name === 'message' && (ins.bytes[1] & 0x40) === 0)
       .map((ins) => ins.bytes[1] & 0x3f);
     const lost = [...new Set(shown.filter((id) => id >= texts.length))].sort((a, b) => a - b);
@@ -412,7 +412,7 @@ function msgSet(args: string[]): void {
       `${textPath} has ${texts.length} messages, ${src} has ${had}. ` +
         (lost.length
           ? `The room's scripts show message ${lost.join(', ')}. `
-          : 'Event scripts are not decoded, so one may show a removed message. ') +
+          : 'No message instruction shows one, but a message zone may. ') +
         'Pass --force to remove them.',
     );
   }
@@ -448,10 +448,15 @@ function ranges(values: number[]): string {
   return parts.join(', ');
 }
 
+/** Every SCD instruction a room runs: init, main, and the SCD inside its event scripts. */
+function scdOf(rdt: Rdt1) {
+  return [...[...rdt.init, ...rdt.main].flatMap((p) => p.instructions), ...rdt.events.flatMap((e) => evtScdInstructions(e.instructions))];
+}
+
 /**
- * For every flag group and index: the rooms whose init or main script tests it
- * (ck) and the rooms that set, clear or toggle it (set mode 0, 1, 2). Indexes no room touches are listed
- * per group. Event scripts are not decoded, so they may still use those.
+ * For every flag group and index: the rooms whose scripts test it (ck) and the
+ * rooms that set, clear or toggle it (set mode 0, 1, 2), event scripts
+ * included. Indexes no room touches are listed per group.
  */
 function flagsReport(target: string): string {
   const uses = new Map<number, Map<number, FlagUse>>();
@@ -459,7 +464,7 @@ function flagsReport(target: string): string {
     if (room.bytes.length < 0x94) continue;
     const name = path.basename(room.name.replace(/\\/g, '/'), path.extname(room.name));
     const rdt = parseRdt1(room.bytes);
-    for (const ins of [...rdt.init, ...rdt.main].flatMap((p) => p.instructions)) {
+    for (const ins of scdOf(rdt)) {
       if (ins.name !== 'ck' && ins.name !== 'set') continue;
       const group = argValue(ins.args[0]);
       const index = argValue(ins.args[1]);
@@ -493,7 +498,7 @@ function flagsReport(target: string): string {
     const unused = Array.from({ length: 256 }, (_, i) => i).filter((i) => !byIndex.has(i));
     lines.push(`  never used: ${unused.length ? ranges(unused) : 'none'}`, '');
   }
-  lines.push('Only init and main scripts are read. Event scripts are not decoded, so an unused index may still be used there.');
+  lines.push('Init, main and event scripts are read. An event script that ends in raw(...) bytes is read up to those bytes.');
   return lines.join('\n');
 }
 
