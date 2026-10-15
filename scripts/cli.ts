@@ -7,7 +7,7 @@
 //                                    TIM -> PNG, VAG -> WAV, VAB -> WAV samples,
 //                                    RDT -> sections, script.c and room.json
 //   room    <image> <path> | <file.rdt>   room summary: cameras, enemies, items, doors
-//   script  <image> <path> | <file.rdt>   decompiled init and main room scripts
+//   script  <image> <path> | <file.rdt>   decompiled init, main and event room scripts
 //   rooms   <image>                  one line per room across the whole disc
 //   music   <image> <outdir>         RE1's sequenced music (SOUND/*.HSB): per file a
 //                                    JSON of its bank and sequences, a MIDI file per
@@ -26,9 +26,11 @@ import { decodeAdpcm, decodeVag, parseAudio, pcmToWav, vabSamples } from '../ele
 import { adpcmLoop, parseHsb, sequenceToMidi } from '../electron/parsers/audio/psxSeq';
 import { interpretRe1 } from '../electron/parsers/re1/registry';
 import {
-  formatScripts, isEmptyRoomSlot, parseRdt1, readRdtMessages, replaceRdtMessages, replaceRdtSections, type Rdt1,
+  encodeEventSection, formatScripts, isEmptyRoomSlot, parseRdt1, readRdtMessages, replaceRdtMessages, replaceRdtSections,
+  type Rdt1,
 } from '../electron/parsers/re1/rdt1';
 import { encodeMessage, formatMessages, parseMessages } from '../electron/parsers/re1/msg1';
+import { evtScdInstructions } from '../electron/parsers/re1/evt1';
 import { assembleScd1 } from '../electron/parsers/re1/scdAsm';
 import { encodeScd1, enemyName, FLAG_GROUPS, type ScdArg } from '../electron/parsers/re1/scd1';
 import { encodePng } from './png';
@@ -331,8 +333,8 @@ function swapEnemy(args: string[]): void {
 
 /**
  * Assemble script text (the format `script` prints) and write a copy of a room
- * whose init and main procedures are the assembled ones. A script section with
- * no procedures in the text keeps the room's own.
+ * whose init, main and event procedures are the assembled ones. A script
+ * section with no procedures in the text keeps the room's own.
  */
 function asm(args: string[]): void {
   const [scriptPath, src, dest] = args;
@@ -342,13 +344,14 @@ function asm(args: string[]): void {
     if (path.resolve(input) === path.resolve(dest)) fail(`out.rdt must differ from ${input}; asm writes a copy`);
   }
   const scripts = assembleScd1(readFileSync(scriptPath, 'utf8'));
-  if (scripts.init.length + scripts.main.length === 0) {
-    fail(`${scriptPath} has no "// init procedure" or "// main procedure" blocks`);
+  if (scripts.init.length + scripts.main.length + scripts.event.length === 0) {
+    fail(`${scriptPath} has no "// init procedure", "// main procedure" or "// event procedure" blocks`);
   }
   const original = new Uint8Array(readFileSync(src));
   const out = replaceRdtSections(original, {
     init: scripts.init.length ? scripts.init : undefined,
     main: scripts.main.length ? scripts.main : undefined,
+    event: scripts.event.length ? scripts.event : undefined,
   });
   // Read the new room back to prove the writer produced what was assembled.
   const room = parseRdt1(out);
@@ -359,6 +362,14 @@ function asm(args: string[]): void {
       fail(`${kind} procedures read back from the new room differ from the assembled ones`);
     }
   }
+  const events = room.sections.find((s) => s.name === 'events.scd');
+  if (scripts.event.length) {
+    const want = encodeEventSection(scripts.event);
+    const at = events?.offset ?? -1;
+    if (room.events.length !== scripts.event.length || !Buffer.from(out.subarray(at, at + want.length)).equals(want)) {
+      fail('event procedures read back from the new room differ from the assembled ones');
+    }
+  }
   writeFileSync(dest, out);
   // replaceRdtSections leaves a section alone when its bytes are already the room's.
   const was = parseRdt1(original);
@@ -366,14 +377,19 @@ function asm(args: string[]): void {
     scripts[kind].length && room[kind][0].offset !== was[kind][0]?.offset
       ? `${kind} ${scripts[kind].length} procedure(s) written at 0x${room[kind][0].offset.toString(16)}`
       : `${kind} unchanged`;
-  console.log(`wrote ${dest}: ${describe('init')}, ${describe('main')}`);
+  const wasEvents = was.sections.find((s) => s.name === 'events.scd');
+  const event =
+    scripts.event.length && events && events.offset !== wasEvents?.offset
+      ? `event ${scripts.event.length} procedure(s) written at 0x${events.offset.toString(16)}`
+      : 'event unchanged';
+  console.log(`wrote ${dest}: ${describe('init')}, ${describe('main')}, ${event}`);
 }
 
 /**
  * Replace a room's messages with the `index: text` lines `msg` prints. Adding
  * messages at the end is always fine. Removing any is refused without --force:
- * a script may still show a message by number, and event scripts are not
- * decoded, so there is no way to prove one does not.
+ * the error names the messages a message instruction shows, but a message
+ * zone (aot_set with SCE_MESSAGE) can show one too.
  */
 function msgSet(args: string[]): void {
   const force = args.includes('--force');
@@ -388,8 +404,7 @@ function msgSet(args: string[]): void {
   const out = replaceRdtMessages(original, texts);
   if (texts.length < had && !force) {
     const room = parseRdt1(original);
-    const shown = [...room.init, ...room.main]
-      .flatMap((p) => p.instructions)
+    const shown = scdOf(room)
       .filter((ins) => ins.name === 'message' && (ins.bytes[1] & 0x40) === 0)
       .map((ins) => ins.bytes[1] & 0x3f);
     const lost = [...new Set(shown.filter((id) => id >= texts.length))].sort((a, b) => a - b);
@@ -397,7 +412,7 @@ function msgSet(args: string[]): void {
       `${textPath} has ${texts.length} messages, ${src} has ${had}. ` +
         (lost.length
           ? `The room's scripts show message ${lost.join(', ')}. `
-          : 'Event scripts are not decoded, so one may show a removed message. ') +
+          : 'No message instruction shows one, but a message zone may. ') +
         'Pass --force to remove them.',
     );
   }
@@ -433,10 +448,15 @@ function ranges(values: number[]): string {
   return parts.join(', ');
 }
 
+/** Every SCD instruction a room runs: init, main, and the SCD inside its event scripts. */
+function scdOf(rdt: Rdt1) {
+  return [...[...rdt.init, ...rdt.main].flatMap((p) => p.instructions), ...rdt.events.flatMap((e) => evtScdInstructions(e.instructions))];
+}
+
 /**
- * For every flag group and index: the rooms whose init or main script tests it
- * (ck) and the rooms that set, clear or toggle it (set mode 0, 1, 2). Indexes no room touches are listed
- * per group. Event scripts are not decoded, so they may still use those.
+ * For every flag group and index: the rooms whose scripts test it (ck) and the
+ * rooms that set, clear or toggle it (set mode 0, 1, 2), event scripts
+ * included. Indexes no room touches are listed per group.
  */
 function flagsReport(target: string): string {
   const uses = new Map<number, Map<number, FlagUse>>();
@@ -444,7 +464,7 @@ function flagsReport(target: string): string {
     if (room.bytes.length < 0x94) continue;
     const name = path.basename(room.name.replace(/\\/g, '/'), path.extname(room.name));
     const rdt = parseRdt1(room.bytes);
-    for (const ins of [...rdt.init, ...rdt.main].flatMap((p) => p.instructions)) {
+    for (const ins of scdOf(rdt)) {
       if (ins.name !== 'ck' && ins.name !== 'set') continue;
       const group = argValue(ins.args[0]);
       const index = argValue(ins.args[1]);
@@ -478,7 +498,7 @@ function flagsReport(target: string): string {
     const unused = Array.from({ length: 256 }, (_, i) => i).filter((i) => !byIndex.has(i));
     lines.push(`  never used: ${unused.length ? ranges(unused) : 'none'}`, '');
   }
-  lines.push('Only init and main scripts are read. Event scripts are not decoded, so an unused index may still be used there.');
+  lines.push('Init, main and event scripts are read. An event script that ends in raw(...) bytes is read up to those bytes.');
   return lines.join('\n');
 }
 
