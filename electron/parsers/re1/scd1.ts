@@ -35,6 +35,56 @@ const SIZES: readonly number[] = [
   2,
 ];
 
+export interface OpcodeInfo {
+  opcode: number;
+  name: string;
+  /** Operand letters, or null when the operands are plain bytes. */
+  signature: string | null;
+  /** Instruction size in bytes, opcode included. */
+  size: number;
+}
+
+/** Every opcode with a known size, indexed by opcode. */
+const OPS: readonly (OpcodeInfo | undefined)[] = OPCODES.map((entry, opcode) => {
+  const size = SIZES[opcode] ?? 0;
+  if (size === 0) return undefined;
+  const colon = entry.indexOf(':');
+  const name = (colon < 0 ? entry : entry.slice(0, colon)) || `op_${hex(opcode)}`;
+  return { opcode, name, signature: colon < 0 ? null : entry.slice(colon + 1), size };
+});
+
+export function opcodeByName(name: string): OpcodeInfo | undefined {
+  return OPS.find((op) => op?.name === name);
+}
+
+/**
+ * Size of the instruction at `at`. Three opcodes take a sub-command that sets
+ * their length (docs/SCD_COMMAND_OPCODES.md in the Resident Evil PC decomp);
+ * the rest have the fixed size from SIZES.
+ */
+function sizeAt(code: Uint8Array, at: number): number {
+  const opcode = code[at];
+  const size = SIZES[opcode] ?? 0;
+  switch (opcode) {
+    case 0x17: // se_play_3d: positions follow only for posType 0-3
+      return (code[at + 4] ?? 0) > 3 ? 6 : 10;
+    case 0x28: // enemy_prop_set
+      switch (code[at + 3]) {
+        case 1:
+          return 8;
+        case 6:
+        case 8:
+          return 4;
+        default:
+          return 6;
+      }
+    case 0x33: // player_prop_set
+      return [1, 3, 5, 8, 9, 10].includes(code[at + 1]) ? 4 : 2;
+    default:
+      return size;
+  }
+}
+
 const OP_IF = 0x01;
 const OP_ELSE = 0x02;
 const OP_ENDIF = 0x03;
@@ -56,6 +106,21 @@ export const ENEMY_NAMES: readonly string[] = [
   'Jill (Black Shirt)', 'Chris 2 (Jacket)', 'Jill (Red Shirt)',
 ];
 
+/**
+ * Enemy types the engine can load. LoadEntityEMD reads g_emdPathTable at
+ * (type + 4), and that table holds 53 entries per player, so types 0-48 name a
+ * model. ENEMY_NAMES lists a few more (Jill, Chris variants) that the engine
+ * would read from the other player's half of the table.
+ */
+export const ENEMY_TYPE_COUNT = 53 - 4;
+
+/**
+ * Highest item id the engine has a name for: g_ItemNamePointers holds 128
+ * entries and is indexed by item id - 1. Retail rooms place items up to 110
+ * (the files and documents), well past the 76 ids ITEM_NAMES labels.
+ */
+export const MAX_ITEM_ID = 128;
+
 export const ITEM_NAMES: readonly string[] = [
   'Nothing', 'Combat Knife', 'Beretta', 'Shotgun', 'DumDum Colt', 'Colt Python',
   'FlameThrower', 'Bazooka Acid', 'Bazooka Explosive', 'Bazooka Flame', 'Rocket Launcher',
@@ -73,7 +138,7 @@ export const ITEM_NAMES: readonly string[] = [
   'Mixed (Bright Blue-Green)',
 ];
 
-const FLAG_GROUPS = [
+export const FLAG_GROUPS = [
   'FG_SCENARIO', 'FG_COMMON', 'FG_LOCK', 'FG_ENEMY', 'FG_ROOM', 'FG_STATUS', 'FG_6',
   'FG_ITEM', 'FG_MAP', 'FG_9',
 ];
@@ -84,7 +149,9 @@ const SCE_NAMES = [
 ];
 const WORK_NAMES = ['WK_PLAYER', 'WK_ENEMY', 'WK_OBJ', 'WK_AOT'];
 
-const hex = (n: number, width = 2) => n.toString(16).toUpperCase().padStart(width, '0');
+function hex(n: number, width = 2): string {
+  return n.toString(16).toUpperCase().padStart(width, '0');
+}
 
 function tableName(table: readonly string[], prefix: string, value: number): string {
   const name = table[value];
@@ -190,20 +257,109 @@ export function readScd1(rdt: Uint8Array, start: number, end: number): ScdInstru
   let at = start;
   while (at < end && at < rdt.length) {
     const opcode = rdt[at];
-    const size = SIZES[opcode] ?? 0;
-    if (size === 0 || at + size > end) break;
+    const info = OPS[opcode];
+    const size = sizeAt(rdt, at);
+    if (!info || size === 0 || at + size > end) break;
     const bytes = rdt.subarray(at, at + size);
-    const entry = OPCODES[opcode] ?? '';
-    const colon = entry.indexOf(':');
-    const name = (colon < 0 ? entry : entry.slice(0, colon)) || `op_${hex(opcode)}`;
     const args =
-      colon < 0
+      info.signature === null
         ? Array.from(bytes.subarray(1), (value) => ({ kind: 'num' as const, value }))
-        : decodeArgs(entry.slice(colon + 1), bytes, at);
-    out.push({ offset: at, opcode, name, args, bytes });
+        : decodeArgs(info.signature, bytes, at);
+    out.push({ offset: at, opcode, name: info.name, args, bytes });
     at += size;
   }
   return out;
+}
+
+const SIGNATURE_RANGES: Record<string, [number, number]> = { U: [0, 0xffff], I: [-0x8000, 0x7fff] };
+
+/** Operand value as a number; a label is not allowed where a number is. */
+function numericArg(arg: ScdArg, what: string): number {
+  if (arg.kind === 'label') throw new Error(`${what}: expected a number, got a label`);
+  return arg.value;
+}
+
+/** Encode one instruction. Labels are stored as the distance from `offset`. */
+function encodeInstruction(ins: ScdInstruction): Uint8Array {
+  const info = OPS[ins.opcode];
+  if (!info) throw new Error(`opcode 0x${hex(ins.opcode)} has no known size`);
+  // Opcodes without a signature take plain bytes, as many as the arguments given.
+  const signature = info.signature ?? 'u'.repeat(ins.args.length);
+  if (ins.args.length !== signature.length) {
+    throw new Error(`${info.name} takes ${signature.length} operands, got ${ins.args.length}`);
+  }
+  const bytes: number[] = [ins.opcode];
+  [...signature].forEach((letter, i) => {
+    const arg = ins.args[i];
+    const what = `${info.name} operand ${i + 1}`;
+    const value = letter === 'l' ? labelDistance(arg, ins.offset, what) : numericArg(arg, what);
+    const [min, max] = SIGNATURE_RANGES[letter] ?? [0, 0xff];
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new Error(`${what} is ${value}, outside ${min}..${max}`);
+    }
+    bytes.push(value & 0xff);
+    if (letter === 'U' || letter === 'I') bytes.push((value >> 8) & 0xff);
+  });
+  const out = Uint8Array.from(bytes);
+  if (sizeAt(out, 0) !== out.length) {
+    throw new Error(`${info.name} with ${ins.args.length} operands is ${out.length} bytes, the decoder reads ${sizeAt(out, 0)}`);
+  }
+  return out;
+}
+
+function labelDistance(arg: ScdArg, offset: number, what: string): number {
+  if (arg.kind !== 'label') throw new Error(`${what}: expected a label`);
+  return arg.target - offset;
+}
+
+/**
+ * The inverse of `readScd1`: encode instructions back to bytes. Only `opcode`,
+ * `args` and `offset` are read, so instructions built or edited by hand work;
+ * label targets and offsets must agree.
+ */
+export function encodeScd1(instructions: readonly ScdInstruction[]): Uint8Array {
+  const parts = instructions.map(encodeInstruction);
+  const out = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}
+
+/**
+ * The value of a named constant that `formatScd1` prints bare for the operand
+ * letter, such as FG_ITEM or ROOM_203. Undefined when `token` is not one.
+ */
+export function parseConstant(letter: string, token: string): number | undefined {
+  const index = (table: readonly string[]) => {
+    const i = table.indexOf(token);
+    return i < 0 ? undefined : i;
+  };
+  const fallback = (prefix: string) => {
+    const m = new RegExp(`^${prefix}([0-9A-F]{2})$`).exec(token);
+    return m ? parseInt(m[1], 16) : undefined;
+  };
+  switch (letter) {
+    case 'f':
+      return index(FLAG_GROUPS);
+    case 's':
+      return index(SCE_NAMES);
+    case 'w':
+      return index(WORK_NAMES);
+    case 'e':
+      return fallback('ENEMY_');
+    case 't':
+      return new Map([['UNLOCKED', 0], ['UNLOCK', 254], ['LOCKED', 255]]).get(token) ?? fallback('ITEM_');
+    case 'r': {
+      const m = /^ROOM_(S|[1-7])([0-9A-F]{2})$/.exec(token);
+      if (!m || parseInt(m[2], 16) > 0x1f) return undefined;
+      return (m[1] === 'S' ? 0 : Number(m[1])) * 32 + parseInt(m[2], 16);
+    }
+    default:
+      return undefined;
+  }
 }
 
 function formatArg(arg: ScdArg): string {
@@ -266,9 +422,7 @@ export function formatScd1(instructions: readonly ScdInstruction[]): string {
       blocks.push({ kind: 'else', end: label.target });
     } else if (ins.opcode === OP_ENDIF) {
       if (blocks.length) close();
-    } else if (ins.opcode === 0x0e) {
-      // nop
-    } else if (ins.opcode === 0x00) {
+    } else if (ins.opcode === 0x00 && ins.bytes[1] === 0) {
       emit('return;');
     } else {
       emit(`${call(ins)};`);
