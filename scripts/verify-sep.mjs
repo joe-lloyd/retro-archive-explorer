@@ -48,7 +48,9 @@ const sep = [...[...'pQES'].map((c) => c.charCodeAt(0)), 0, 0, ...be(0, 2), ...b
 
 // The sample: a loop start block, a plain block, and an end block that repeats.
 const sample = [0, 4, ...Array(14).fill(0), 0, 0, ...Array(14).fill(0), 0, 3, ...Array(14).fill(0)];
-const hsb = parseHsb(Uint8Array.from([...vab, ...sep, ...sample]));
+const le32 = (v) => [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, v >>> 24];
+const trailer = [...le32(vab.length + sep.length), ...le32(vab.length), 0, 0, 0, 0];
+const hsb = parseHsb(Uint8Array.from([...vab, ...sep, ...sample, ...trailer]));
 
 assert.deepEqual(hsb.bank.programs, [
   {

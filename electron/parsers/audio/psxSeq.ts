@@ -73,6 +73,7 @@ export interface Hsb {
 
 const ascii = (b: Uint8Array, at: number, n: number) => String.fromCharCode(...b.subarray(at, at + n));
 const u16le = (b: Uint8Array, at: number) => b[at]! | (b[at + 1]! << 8);
+const u32le = (b: Uint8Array, at: number) => (u16le(b, at) | (u16le(b, at + 2) << 16)) >>> 0;
 const u16be = (b: Uint8Array, at: number) => (b[at]! << 8) | b[at + 1]!;
 const u24be = (b: Uint8Array, at: number) => (b[at]! << 16) | (b[at + 1]! << 8) | b[at + 2]!;
 const u32be = (b: Uint8Array, at: number) => ((u16be(b, at) << 16) | u16be(b, at + 2)) >>> 0;
@@ -207,7 +208,8 @@ function parseEvents(b: Uint8Array): { events: SeqEvent[]; ticks: number; loop?:
 export function parseSep(b: Uint8Array): Sequence[] {
   if (ascii(b, 0, 4) !== 'pQES' || u16be(b, 4) !== 0) throw new Error('not a SEP: no pQES with version 0');
   const out: Sequence[] = [];
-  for (let at = 6; at + 13 <= b.length; ) {
+  let at = 6;
+  while (at + 13 <= b.length) {
     const usPerQuarter = u24be(b, at + 4);
     const length = u32be(b, at + 9);
     if (usPerQuarter === 0 || length === 0 || at + 13 + length > b.length) break; // padding to the bank's samples
@@ -218,15 +220,19 @@ export function parseSep(b: Uint8Array): Sequence[] {
   return out;
 }
 
-/** RE1's .HSB: a bank header, a SEP, then the bank's samples at the end of the file. */
+/**
+ * RE1's .HSB: a bank header, a SEP, the bank's samples, and a 12-byte
+ * trailer giving where the samples and the SEP start (then a zero word).
+ */
 export function parseHsb(b: Uint8Array): Hsb {
   const bank = parseVab(b);
-  const body = bank.sampleSizes.reduce((a, n) => a + n, 0);
-  const bodyAt = b.length - body;
-  if (bodyAt < bank.headerSize) throw new Error('the samples overlap the header');
-  const sequences = parseSep(b.subarray(bank.headerSize, bodyAt));
+  const bodyAt = u32le(b, b.length - 12);
+  const sepAt = u32le(b, b.length - 8);
+  if (sepAt !== bank.headerSize || bodyAt < sepAt || bodyAt > b.length - 12) throw new Error(`bad HSB trailer: SEP at ${sepAt}, samples at ${bodyAt}`);
+  const sequences = parseSep(b.subarray(sepAt, bodyAt));
   let offset = bodyAt;
   const samples = bank.sampleSizes.map((size) => {
+    if (offset + size > b.length - 12) throw new Error('the samples run past the trailer');
     const s = { offset, size };
     offset += size;
     return s;
