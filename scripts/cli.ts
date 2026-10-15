@@ -24,7 +24,7 @@ import { interpretRe1 } from '../electron/parsers/re1/registry';
 import {
   formatScripts, isEmptyRoomSlot, parseRdt1, readRdtMessages, replaceRdtMessages, replaceRdtSections, type Rdt1,
 } from '../electron/parsers/re1/rdt1';
-import { formatMessages, parseMessages } from '../electron/parsers/re1/msg1';
+import { encodeMessage, formatMessages, parseMessages } from '../electron/parsers/re1/msg1';
 import { assembleScd1 } from '../electron/parsers/re1/scdAsm';
 import { encodeScd1, enemyName, FLAG_GROUPS, type ScdArg } from '../electron/parsers/re1/scd1';
 import { encodePng } from './png';
@@ -366,9 +366,10 @@ function msgSet(args: string[]): void {
         'Pass --force to remove them.',
     );
   }
-  // Read the new room back to prove the writer stored what was parsed.
-  const written = readRdtMessages(out).map((m) => m.text);
-  if (written.length !== texts.length || written.some((t, i) => t !== texts[i])) {
+  // Read the new room back to prove the writer stored what was encoded. Bytes,
+  // not text: \x1D and A are the same glyph, and the room only keeps the bytes.
+  const written = readRdtMessages(out).map((m) => m.bytes);
+  if (written.length !== texts.length || written.some((b, i) => !Buffer.from(b).equals(encodeMessage(texts[i])))) {
     fail('messages read back from the new room differ from the ones given');
   }
   writeFileSync(dest, out);

@@ -1,8 +1,9 @@
 // Builds a tiny synthetic RE1 room file from the documented layout, runs the
-// CLI's `room` and `script` commands on it, and checks the literal output.
+// CLI's `room`, `script`, `msg` and `msg-set` commands on it, and checks the
+// literal output.
 // This proves the decoder follows the documented layout; it does not prove the
 // layout matches retail discs. Run: node scripts/verify-rdt1.mjs
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -33,26 +34,42 @@ const INIT_AT = ZONE_AT + zone.length;
 const init = container(initOps);
 const MAIN_AT = INIT_AT + init.length;
 const main = container(mainOps);
+// One message, "Hi": the offset table, then H, i and the end marker 01 00.
+const MESSAGES_AT = MAIN_AT + main.length;
+const messages = [...u16(2), 0x24, 0x45, 0x01, 0x00];
+// The writers keep snd.vb last; its bytes are never read here.
+const VB_AT = MESSAGES_AT + messages.length;
+const vb = Array(16).fill(0);
 
-const bytes = new Uint8Array(MAIN_AT + main.length);
+const bytes = new Uint8Array(VB_AT + vb.length);
 bytes.set(u8(0, 1, 0, 0, 1, 0), 0);
 const table = Array(19).fill(0);
 table[0] = ZONE_AT;
 table[6] = INIT_AT;
 table[7] = MAIN_AT;
+table[11] = MESSAGES_AT;
+table[18] = VB_AT;
 table.forEach((v, i) => bytes.set(u32(v), 0x48 + i * 4));
 const camera = [0, 0, 1000, -2000, 3000, 0, 0, 0, 0, 0, 0].flatMap((v) => u32(v));
 bytes.set(camera, CAMERAS_AT);
 bytes.set(zone, ZONE_AT);
 bytes.set(init, INIT_AT);
 bytes.set(main, MAIN_AT);
+bytes.set(messages, MESSAGES_AT);
+bytes.set(vb, VB_AT);
 
 const dir = mkdtempSync(path.join(tmpdir(), 'rdt1-'));
 const file = path.join(dir, 'ROOM1000.RDT');
 writeFileSync(file, bytes);
 
 const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cli.mjs');
-const run = (cmd) => execFileSync(process.execPath, [cli, cmd, file], { encoding: 'utf8' });
+const runOn = (...args) => execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+const run = (cmd) => runOn(cmd, file);
+const write = (name, text) => {
+  const at = path.join(dir, name);
+  writeFileSync(at, text);
+  return at;
+};
 
 const expectRoom = [
   'cameras',
@@ -89,5 +106,18 @@ if (script !== expectScript) {
   failed++;
   console.error(`script: mismatch\n--- expected\n${expectScript}--- actual\n${script}`);
 }
+
+// msg-set reads the room back by bytes, so spellings that decode to a shorter
+// form (\x1D is A, \d{0} is the default end, \t{1}\m{0}\t{0} is \i) are written.
+const msgOut = path.join(dir, 'MSG.RDT');
+const spellings = write('messages.txt', '0: \\x1D\\d{0}\n1: \\t{1}\\m{0}\\t{0} found\n2: Hi\\d{30}\n');
+const msgSet = spawnSync(process.execPath, [cli, 'msg-set', spellings, file, msgOut], { encoding: 'utf8' });
+const expectMsg = '0: A\n1: \\i found\n2: Hi\\d{30}\n';
+const gotMsg = msgSet.status === 0 ? runOn('msg', msgOut) : `msg-set failed: ${msgSet.stderr}`;
+if (gotMsg !== expectMsg) {
+  failed++;
+  console.error(`msg-set: mismatch\n--- expected\n${expectMsg}--- actual\n${gotMsg}`);
+}
+
 if (failed) process.exit(1);
-console.log('ok: room and script output match');
+console.log('ok: room, script and msg-set output match');
