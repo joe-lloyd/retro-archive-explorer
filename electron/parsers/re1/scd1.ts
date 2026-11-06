@@ -79,7 +79,8 @@ function sizeAt(code: Uint8Array, at: number): number {
           return 6;
       }
     case 0x33: // player_prop_set
-      return [1, 3, 5, 8, 9, 10].includes(code[at + 1]) ? 4 : 2;
+      // 11 is the Resident Evil PC decomp's port addition: hurt her, a trap with no enemy.
+      return [1, 3, 5, 8, 9, 10, 11].includes(code[at + 1]) ? 4 : 2;
     default:
       return size;
   }
